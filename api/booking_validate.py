@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 import sys
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,6 +44,12 @@ app = FastAPI(
     version     = "1.0.0",
     docs_url    = "/docs",
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/", include_in_schema=False)
+async def serve_dashboard():
+    return FileResponse("static/index.html")
 
 app.add_middleware(
     CORSMiddleware,
