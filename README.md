@@ -403,14 +403,6 @@ The paper formally characterises the gap between India's existing CLDP retrospec
 
 ---
 
-## 📄 License
-
-Licensed under the **Apache License 2.0** — see [LICENSE](./LICENSE) for details.
-
-You are free to use, modify, and distribute this code. Attribution required. Patent claims in this repository are not licensed under this license.
-
----
-
 ## 👤 Author
 
 **Athrva Raut**  
