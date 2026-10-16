@@ -723,33 +723,34 @@
       Stop LPG Fraud<br><span>Before It Happens</span>
     </h1>
     <p class="hero-sub">
-      India loses ₹1,241 crore every month to LPG black market fraud.
-      GasSetu is the real-time prevention layer that stops it at the booking layer —
-      before a single cylinder moves.
+      In March–April 2026 enforcement teams ran more than 1.28 lakh raids and seized over
+      59,000 diverted cylinders (Business Standard, 14 Apr 2026).
+      GasSetu scores every booking in real time and sends suspicious ones to human review,
+      before a cylinder moves.
     </p>
   </div>
 
   <!-- STATS -->
   <div class="stats-row">
     <div class="stat-card">
-      <div class="stat-label">Monthly Loss Targeted</div>
-      <div class="stat-value red" id="stat1">₹1,241 Cr</div>
-      <div class="stat-delta">Per month, India-wide</div>
+      <div class="stat-label">Active Domestic LPG Consumers</div>
+      <div class="stat-value red" id="stat1">32.94 Cr</div>
+      <div class="stat-delta">PIB, as on 1 Mar 2025</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Fraud Checks / Second</div>
-      <div class="stat-value orange" id="stat2">2,800+</div>
-      <div class="stat-delta">At peak load capacity</div>
+      <div class="stat-label">Enforcement Raids (Mar–Apr 2026)</div>
+      <div class="stat-value orange" id="stat2">1.28 lakh</div>
+      <div class="stat-delta">59,000+ cylinders seized</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Detection Accuracy</div>
-      <div class="stat-value green" id="stat3">94.2%</div>
-      <div class="stat-delta">On synthetic test data</div>
+      <div class="stat-label">DAC-Confirmed Deliveries</div>
+      <div class="stat-value green" id="stat3">94.5%</div>
+      <div class="stat-delta">Apr 2026; mandatory from 1 May</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Tests Passing</div>
-      <div class="stat-value blue" id="stat4">61 / 61</div>
-      <div class="stat-delta">Full test suite green</div>
+      <div class="stat-label">API Round-Trip (this session)</div>
+      <div class="stat-value blue" id="stat4">—</div>
+      <div class="stat-delta" id="stat4-note">measured on /health</div>
     </div>
   </div>
 
@@ -928,7 +929,7 @@
               <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">4</div>
               <div>
                 <div class="layer-name">ML Anomaly Detection</div>
-                <div class="layer-desc">Isolation Forest on 10,000 LPG consumption records</div>
+                <div class="layer-desc">Isolation Forest trained on synthetic data · real-data validation in progress</div>
               </div>
               <div class="layer-badge" style="background:#b388ff15;color:#b388ff">ML Model</div>
             </div>
@@ -988,8 +989,8 @@
     <div class="card">
       <div class="card-header">
         <div class="card-title">
-          <div class="card-title-icon" style="background:#ff6b1a18">🥧</div>
-          Fraud Type Breakdown
+          <div class="card-title-icon" style="background:#ff6b1a18">🧭</div>
+          Fraud Types Covered
         </div>
       </div>
       <div class="card-body">
@@ -1261,32 +1262,32 @@ function addToFeed(payload, data) {
 // ── FRAUD BARS ────────────────────────────────────────────────────────────────
 function buildFraudBars() {
   const container = document.getElementById('fraud-bars');
+  // Which layer handles each fraud type. No percentages: there is no measured breakdown yet.
   const types = [
-    { label: 'Domestic→Commercial Misuse', pct: 42, color: 'var(--red)' },
-    { label: 'Ghost Deliveries',           pct: 28, color: 'var(--accent)' },
-    { label: 'Cylinder Reselling',         pct: 18, color: 'var(--yellow)' },
-    { label: 'Stolen GSTIN Identity',      pct: 8,  color: 'var(--blue)' },
-    { label: 'SIM Farm / Ghost Accounts',  pct: 4,  color: '#b388ff' },
+    { label: 'Domestic→Commercial Misuse', layer: 'GSTN check (declared GSTIN)',   color: 'var(--red)' },
+    { label: 'Ghost Deliveries',           layer: 'Delivery chain + reconciliation', color: 'var(--accent)' },
+    { label: 'Cylinder Reselling',         layer: 'ML consumption model',          color: 'var(--yellow)' },
+    { label: 'Stolen GSTIN Identity',      layer: 'Name vs legal / trade name',    color: 'var(--blue)' },
+    { label: 'Ghost / Duplicate Accounts', layer: 'ML consumption model',          color: '#b388ff' },
   ];
   container.innerHTML = types.map(t => `
-    <div style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-        <span style="font-size:12px;color:var(--text)">${t.label}</span>
-        <span style="font-family:var(--mono);font-size:11px;color:${t.color}">${t.pct}%</span>
-      </div>
-      <div style="background:var(--border);border-radius:4px;height:5px;overflow:hidden">
-        <div style="width:${t.pct}%;height:100%;background:${t.color};border-radius:4px;transition:width 1s ease"></div>
-      </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:8px 10px;background:var(--surface);border-radius:8px;border-left:3px solid ${t.color}">
+      <span style="font-size:12px;color:var(--text)">${t.label}</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);text-align:right">${t.layer}</span>
     </div>
-  `).join('');
+  `).join('') + `<div style="font-family:var(--mono);font-size:10px;color:var(--muted)">Undeclared-GSTIN businesses: PAN/FSSAI discovery planned (roadmap step 20)</div>`;
 }
 
 // ── HEALTH CHECK ──────────────────────────────────────────────────────────────
 async function checkHealth() {
   const container = document.getElementById('health-content');
   try {
+    const t0   = performance.now();
     const res  = await fetch(`${API_BASE}/health`);
     const data = await res.json();
+    const ms   = Math.round(performance.now() - t0);
+    document.getElementById('stat4').textContent = `${ms} ms`;
+    document.getElementById('stat4-note').textContent = 'measured just now on /health';
     container.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:10px;text-align:left">
         <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface);border-radius:8px">

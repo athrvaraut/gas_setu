@@ -13,11 +13,30 @@ Author: GasSetu
 """
 
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 import hashlib
 import json
+import math
+
+
+def _utc(ts: Optional[datetime] = None) -> datetime:
+    """Normalise to an aware UTC datetime. Naive inputs are treated as UTC."""
+    if ts is None:
+        return datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in metres."""
+    r = 6_371_000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
 
 
 # ─── STATE DEFINITIONS ────────────────────────────────────────────────────────
@@ -159,8 +178,8 @@ class CylinderStateMachine:
         self.current_state  = initial_state
         self.history:  list[StateTransitionEvent] = []
         self.flags:    list[FraudFlag]             = []
-        self.created_at     = datetime.utcnow()
-        self.last_updated   = datetime.utcnow()
+        self.created_at     = _utc()
+        self.last_updated   = self.created_at
 
     # ── CORE TRANSITION METHOD ────────────────────────────────────────────────
 
@@ -182,7 +201,7 @@ class CylinderStateMachine:
         Attempt a state transition.
         Returns: { "allowed": bool, "new_state": str, "fraud_flag": dict|None }
         """
-        timestamp = timestamp or datetime.utcnow()
+        timestamp = _utc(timestamp)
 
         # ── CHECK 1: Is this transition legally allowed? ──────────────────────
         if to_state not in LEGAL_TRANSITIONS.get(self.current_state, []):
@@ -227,8 +246,8 @@ class CylinderStateMachine:
                 description = f"GPS accuracy {gps_accuracy}m — below verification threshold. Auto-logged, not blocked.",
                 agent_id    = agent_id,
                 evidence    = {"gps_accuracy": gps_accuracy},
+                block       = False,   # LOW severity — log only, the cylinder keeps its real state
             )
-            # LOW severity — don't block, just log
 
         # ── CHECK 4: Mock location detection (sensor fusion) ──────────────────
         mock_flag = self._detect_mock_location(gps_lat, gps_lng, gps_accuracy, accelerometer)
@@ -298,17 +317,14 @@ class CylinderStateMachine:
         Sensor fusion check: GPS movement must correlate with accelerometer movement.
         If GPS shows movement but accelerometer shows stillness → mock location app.
         """
-        if not self.history or not gps_lat or not gps_lng:
+        if not self.history or gps_lat is None or gps_lng is None:
             return None
 
         last = self.history[-1]
-        if not last.gps_lat or not last.gps_lng:
+        if last.gps_lat is None or last.gps_lng is None:
             return None
 
-        # Calculate GPS distance moved (simplified flat-earth for short distances)
-        lat_diff = abs(gps_lat - last.gps_lat) * 111_000   # ~111km per degree lat
-        lng_diff = abs(gps_lng - last.gps_lng) * 111_000
-        gps_distance_moved = (lat_diff**2 + lng_diff**2) ** 0.5  # metres
+        gps_distance_moved = _haversine_m(last.gps_lat, last.gps_lng, gps_lat, gps_lng)  # metres
 
         # If GPS shows moved > 100m but accelerometer shows near-zero movement
         if (gps_distance_moved > 100
@@ -336,17 +352,30 @@ class CylinderStateMachine:
 
     def verify_chain_integrity(self) -> dict:
         """
-        Walk the entire history and verify every cryptographic hash.
-        Any broken link = tampering detected.
+        Walk the history and check two things for every event:
+          1. HASH_MISMATCH: its stored hash no longer matches its fields (an edited record).
+          2. BROKEN_LINK: its prev_hash is not the hash of the event before it
+             (an event was deleted, inserted or reordered).
+
+        Limitation: dropping the most recent event(s) leaves a shorter chain that is still
+        valid. Only a chain head published outside this server can catch that (planned:
+        device signatures + external anchoring, ROADMAP step 28).
         """
         broken_links = []
         for i, event in enumerate(self.history):
+            expected_prev = self.history[i - 1].event_hash if i else None
             if not event.verify_integrity():
-                broken_links.append({
-                    "index":     i,
-                    "state":     f"{event.from_state} → {event.to_state}",
-                    "timestamp": event.timestamp.isoformat(),
-                })
+                reason = "HASH_MISMATCH"
+            elif event.prev_hash != expected_prev:
+                reason = "BROKEN_LINK"
+            else:
+                continue
+            broken_links.append({
+                "index":     i,
+                "state":     f"{event.from_state} → {event.to_state}",
+                "timestamp": event.timestamp.isoformat(),
+                "reason":    reason,
+            })
 
         return {
             "intact":       len(broken_links) == 0,
@@ -356,18 +385,20 @@ class CylinderStateMachine:
 
     # ── HELPERS ───────────────────────────────────────────────────────────────
 
-    def _raise_flag(self, flag_type, severity, description, agent_id, evidence) -> FraudFlag:
+    def _raise_flag(self, flag_type, severity, description, agent_id, evidence, block: bool = True) -> FraudFlag:
+        """Record a flag. Only blocking flags move the cylinder to FLAGGED; log-only flags leave its state alone."""
         flag = FraudFlag(
             cylinder_id = self.cylinder_id,
             flag_type   = flag_type,
             severity    = severity,
             description = description,
-            timestamp   = datetime.utcnow(),
+            timestamp   = _utc(),
             agent_id    = agent_id,
             evidence    = evidence,
         )
         self.flags.append(flag)
-        self.current_state = CylinderState.FLAGGED
+        if block:
+            self.current_state = CylinderState.FLAGGED
         return flag
 
     def get_summary(self) -> dict:

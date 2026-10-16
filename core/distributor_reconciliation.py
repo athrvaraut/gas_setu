@@ -72,14 +72,14 @@ class CylinderRecord:
         """
         if self.status == DeliveryStatus.DELIVERED and not self.otp_verified_at:
             if self.delivered_at:
-                hours_since = (datetime.now(timezone.utc) - self.delivered_at).seconds / 3600
+                hours_since = (datetime.now(timezone.utc) - self.delivered_at).total_seconds() / 3600
                 return hours_since > 2
         return self.status == DeliveryStatus.GHOST
 
     def time_to_delivery(self) -> Optional[float]:
         """Minutes from assignment to delivery."""
         if self.delivered_at and self.assigned_at:
-            return (self.delivered_at - self.assigned_at).seconds / 60
+            return (self.delivered_at - self.assigned_at).total_seconds() / 60
         return None
 
 
@@ -201,6 +201,9 @@ class DistributorReconciliation:
         self.trust_score: float = 100.0
         self.flag_history: list = []
         self.created_at  = datetime.now(timezone.utc)
+        # trust score before the first reconciliation of each report date, so re-running
+        # reconcile() on the same day replaces that day's adjustment instead of stacking it
+        self._trust_before_day: dict[str, float] = {}
 
     # ── ALLOCATION ────────────────────────────────────────────────────────────
 
@@ -328,13 +331,17 @@ class DistributorReconciliation:
         Math:
           Allocated = Delivered(OTP) + Returned + InTransit + Unaccounted
           Unaccounted > threshold → FRAUD FLAG
+
+        Safe to call more than once: a ghost delivery is penalised only when it is first
+        detected, and the distributor's trust adjustment is applied once per report date.
         """
         now = datetime.now(timezone.utc)
 
-        # Count cylinder statuses
+        # Count cylinder statuses (GHOST = marked delivered, never confirmed, so it counts as "delivered")
         assigned     = sum(1 for c in self.cylinders.values() if c.status == DeliveryStatus.ASSIGNED)
         in_transit   = sum(1 for c in self.cylinders.values() if c.status == DeliveryStatus.IN_TRANSIT)
-        delivered    = sum(1 for c in self.cylinders.values() if c.status in [DeliveryStatus.DELIVERED, DeliveryStatus.OTP_VERIFIED])
+        delivered    = sum(1 for c in self.cylinders.values()
+                           if c.status in [DeliveryStatus.DELIVERED, DeliveryStatus.OTP_VERIFIED, DeliveryStatus.GHOST])
         otp_verified = sum(1 for c in self.cylinders.values() if c.status == DeliveryStatus.OTP_VERIFIED)
         returned     = sum(1 for c in self.cylinders.values() if c.status == DeliveryStatus.RETURNED)
 
@@ -342,8 +349,10 @@ class DistributorReconciliation:
         ghost_list = [c for c in self.cylinders.values() if c.is_ghost()]
         ghost_count = len(ghost_list)
 
-        # Mark them explicitly
+        # Mark and penalise only the ones detected for the first time
         for c in ghost_list:
+            if c.status == DeliveryStatus.GHOST:
+                continue
             c.status = DeliveryStatus.GHOST
             if c.agent_id in self.agents:
                 self.agents[c.agent_id].total_ghost += 1
@@ -427,15 +436,11 @@ class DistributorReconciliation:
                 "action_needed":  len(agent_flags) > 0,
             })
 
-        # Distributor trust score update
-        if level == AlertLevel.CRITICAL:
-            self.trust_score = max(0, self.trust_score - 25)
-        elif level == AlertLevel.WARNING:
-            self.trust_score = max(0, self.trust_score - 10)
-        elif level == AlertLevel.WATCH:
-            self.trust_score = max(0, self.trust_score - 3)
-        else:
-            self.trust_score = min(100, self.trust_score + 1)
+        # Distributor trust score update — once per report date (a re-run replaces it)
+        day = now.strftime("%Y-%m-%d")
+        base = self._trust_before_day.setdefault(day, self.trust_score)
+        delta = {AlertLevel.CRITICAL: -25, AlertLevel.WARNING: -10, AlertLevel.WATCH: -3}.get(level, +1)
+        self.trust_score = max(0, min(100, base + delta))
 
         # Recommendation
         if level == AlertLevel.CRITICAL:

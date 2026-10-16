@@ -2,3 +2,11 @@
 .venv/
 __pycache__/
 *.pyc
+
+# Personal / college documents (contain PRNs and contact details): kept local + OneDrive backup, never pushed
+build_plan.md
+ROADMAP.md
+final_year_project/
+
+# test cache
+.pytest_cache/

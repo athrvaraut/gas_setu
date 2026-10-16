@@ -4,10 +4,10 @@ GasSetu — /booking/validate  (The Final Combined API)
 One endpoint. Three fraud checks. One decision.
 
 POST /booking/validate
-  → Runs GSTN check (fake/stolen GSTIN, wrong cylinder type)
+  → Runs GSTN check (fake/inactive/stolen GSTIN, wrong cylinder type, name vs legal/trade name)
   → Runs Anomaly Detection (behaviour-based fraud)
-  → Runs State Machine check (delivery chain integrity)
   → Returns: APPROVED or BLOCKED with full reason
+  (The delivery state machine and distributor reconciliation are separate modules; see ROADMAP.md.)
 
 This is what you demo to MoPNG.
 This is what you show at SINE IIT Bombay.
@@ -121,6 +121,38 @@ def generate_booking_id() -> str:
     return f"BK-{ts}-{random.randint(1000,9999)}"
 
 
+# What to do for each kind of GSTN block (keyed by the reason prefix set in core/gstn_check.py)
+GSTN_BLOCK_ACTIONS = {
+    "FAKE GSTIN": (
+        "HIGH",
+        "GSTIN fails format validation. Ask for a valid GSTIN, or re-verify KYC before treating "
+        "this as a household booking.",
+    ),
+    "INACTIVE GSTIN": (
+        "HIGH",
+        "GSTIN is suspended or cancelled. Hold the booking and verify the business status "
+        "before any supply.",
+    ),
+    "STOLEN GSTIN": (
+        "HIGH",
+        "Verify consumer identity. GSTIN belongs to a different entity. "
+        "Flag for manual verification before allowing any booking.",
+    ),
+    "FRAUD": (
+        "CRITICAL",
+        "Active GSTIN for a business at this address. Domestic booking held; the consumer "
+        "should book a commercial cylinder (19 kg, 18% GST).",
+    ),
+}
+
+
+def gstn_block_action(reason: str) -> tuple:
+    for prefix, (risk, action) in GSTN_BLOCK_ACTIONS.items():
+        if reason.startswith(prefix):
+            return risk, action
+    return "HIGH", "Hold the booking for manual verification."
+
+
 # ─── MAIN ENDPOINT ────────────────────────────────────────────────────────────
 
 @app.post("/booking/validate", response_model=BookingResponse)
@@ -128,11 +160,11 @@ async def validate_booking(req: BookingRequest):
     """
     Validate an LPG booking request against all fraud detection layers.
     
-    Runs three checks in sequence:
-    1. GSTN Check — verifies GSTIN, catches fake/stolen tax IDs
+    Runs the checks in sequence:
+    1. GSTN Check — format, live status, name vs GSTIN legal/trade name (stolen GSTIN),
+       active GSTIN on a domestic booking (commercial misuse)
     2. Anomaly Detection — ML model on consumption pattern
-    3. Name-GSTIN Match — catches identity theft (stolen GSTINs)
-    
+
     Returns APPROVED or BLOCKED with full audit trail.
     """
     start_time = datetime.now(timezone.utc)
@@ -149,84 +181,44 @@ async def validate_booking(req: BookingRequest):
         consumer_gstin = req.consumer_gstin,
     )
 
+    blocked = gstn_result.is_blocked()
+    block_risk, block_action = gstn_block_action(gstn_result.reason) if blocked else ("PASS", "")
     checks_run.append(FraudCheck(
         check_name = "GSTN_ADDRESS_CHECK",
-        passed     = not gstn_result.is_blocked(),
-        severity   = "CRITICAL" if gstn_result.is_blocked() else "PASS",
+        passed     = not blocked,
+        severity   = block_risk,
         detail     = gstn_result.reason[:200],
-    ).dict())
+    ).model_dump())
 
     # If GSTN check blocks — stop here, no need for further checks
-    if gstn_result.is_blocked():
+    if blocked:
         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         return BookingResponse(
             booking_id      = booking_id,
             consumer_id     = req.consumer_id,
             decision        = "BLOCKED",
             confidence      = gstn_result.confidence,
-            risk_level      = "CRITICAL",
+            risk_level      = block_risk,
             primary_reason  = gstn_result.reason,
             checks_run      = checks_run,
             processing_ms   = round(elapsed, 2),
             timestamp       = start_time.isoformat(),
-            recommended_action = (
-                "Consumer has active GSTIN at this address. "
-                "Must book Commercial cylinder (19kg, ₹2,320 + 18% GST). "
-                "Domestic booking permanently blocked for this address."
-            ),
+            recommended_action = block_action,
         )
 
-    # ── CHECK 2: Name-GSTIN Identity Match ────────────────────────────────────
+    # Name vs GSTIN legal/trade name was already checked inside validate_booking_address
+    # (a mismatch blocks above as STOLEN GSTIN). Record the pass here; don't re-check with a
+    # weaker rule, which used to block genuine trade-name matches (D3).
     if req.consumer_gstin and gstn_result.business_found:
-        gstin_name    = gstn_result.business_names[0] if gstn_result.business_names else ""
-        booking_words = set(req.consumer_name.lower().split())
-        gstin_words   = set(gstin_name.lower().split())
-        common_words  = {"pvt", "ltd", "private", "limited", "and", "the", "&"}
-        meaningful_booking = booking_words - common_words
-        meaningful_gstin   = gstin_words - common_words
-
-        name_overlap = len(meaningful_booking & meaningful_gstin)
-        identity_match = name_overlap > 0 or len(meaningful_booking) == 0
-
-        if not identity_match and len(meaningful_booking) >= 2:
-            checks_run.append(FraudCheck(
-                check_name = "GSTIN_IDENTITY_CHECK",
-                passed     = False,
-                severity   = "HIGH",
-                detail     = (
-                    f"Identity mismatch: booking name '{req.consumer_name}' "
-                    f"does not match GSTIN owner '{gstin_name}'. "
-                    f"Possible stolen/borrowed GSTIN."
-                ),
-            ).dict())
-
-            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-            return BookingResponse(
-                booking_id      = booking_id,
-                consumer_id     = req.consumer_id,
-                decision        = "BLOCKED",
-                confidence      = "HIGH",
-                risk_level      = "HIGH",
-                primary_reason  = (
-                    f"GSTIN identity theft detected. "
-                    f"Booking name '{req.consumer_name}' doesn't match "
-                    f"GSTIN owner '{gstin_name}'."
-                ),
-                checks_run      = checks_run,
-                processing_ms   = round(elapsed, 2),
-                timestamp       = start_time.isoformat(),
-                recommended_action = (
-                    "Verify consumer identity. GSTIN belongs to a different entity. "
-                    "Flag for manual verification before allowing any booking."
-                ),
-            )
-        else:
-            checks_run.append(FraudCheck(
-                check_name = "GSTIN_IDENTITY_CHECK",
-                passed     = True,
-                severity   = "PASS",
-                detail     = f"Name match verified: '{req.consumer_name}' ↔ '{gstin_name}'",
-            ).dict())
+        checks_run.append(FraudCheck(
+            check_name = "GSTIN_IDENTITY_CHECK",
+            passed     = True,
+            severity   = "PASS",
+            detail     = (
+                f"Booking name '{req.consumer_name}' matched the GSTN legal or trade name "
+                f"('{gstn_result.business_names[0] if gstn_result.business_names else 'n/a'}')."
+            ),
+        ).model_dump())
 
     # ── CHECK 3: Consumption Anomaly Detection ────────────────────────────────
     anomaly = detector.check(
@@ -249,7 +241,7 @@ async def validate_booking(req: BookingRequest):
             f"Anomaly score: {anomaly.anomaly_score:.2f}. "
             + (anomaly.flags[0][:150] if anomaly.flags else "Pattern normal.")
         ),
-    ).dict())
+    ).model_dump())
 
     # ── FINAL DECISION ────────────────────────────────────────────────────────
     elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
@@ -310,8 +302,10 @@ async def health():
     }
 
 
-@app.get("/")
-async def root():
+@app.get("/api")
+async def api_index():
+    # "/" serves the dashboard (see serve_dashboard above); this JSON index used to be a
+    # second, unreachable GET "/" route (D10).
     return {
         "name":        "GasSetu Fraud Detection API",
         "description": "Real-time LPG booking fraud prevention for India",
