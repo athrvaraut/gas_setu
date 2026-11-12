@@ -1,0 +1,51 @@
+method,precision,recall,roc_auc,seed
+Confirmation gap (old formula),0.26666666666666666,0.19047619047619047,0.5,0
+Mean refills per household,0.6,0.42857142857142855,0.8351254480286738,0
+Mean household risk score,0.8666666666666667,0.6190476190476191,0.9720088752346816,0
+"GasSetu ranking, bookings only",0.8666666666666667,0.6190476190476191,0.9470899470899472,0
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.7142857142857143,1.0,0
+Confirmation gap (old formula),0.06666666666666667,0.041666666666666664,0.5,1
+Mean refills per household,0.3333333333333333,0.20833333333333334,0.7324124396135266,1
+Mean household risk score,0.9333333333333333,0.5833333333333334,0.9916968599033816,1
+"GasSetu ranking, bookings only",0.7333333333333333,0.4583333333333333,0.9020229468599035,1
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.625,1.0,1
+Confirmation gap (old formula),0.0,0.0,0.5,2
+Mean refills per household,0.6666666666666666,0.47619047619047616,0.7872503840245776,2
+Mean household risk score,1.0,0.7142857142857143,0.9897593445980544,2
+"GasSetu ranking, bookings only",1.0,0.7142857142857143,0.993258235193719,2
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.7142857142857143,1.0,2
+Confirmation gap (old formula),0.06666666666666667,0.05555555555555555,0.5,3
+Mean refills per household,0.4666666666666667,0.3888888888888889,0.7661544523246652,3
+Mean household risk score,1.0,0.8333333333333334,0.9893617021276595,3
+"GasSetu ranking, bookings only",0.9333333333333333,0.7777777777777778,0.9935973207249803,3
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.8333333333333334,1.0,3
+Confirmation gap (old formula),0.06666666666666667,0.030303030303030304,0.5,4
+Mean refills per household,0.7333333333333333,0.3333333333333333,0.7606968562024742,4
+Mean household risk score,1.0,0.45454545454545453,0.9870616275110656,4
+"GasSetu ranking, bookings only",0.9333333333333333,0.42424242424242425,0.97605266144592,4
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.45454545454545453,1.0,4
+Confirmation gap (old formula),0.06666666666666667,0.0625,0.5,5
+Mean refills per household,0.2,0.1875,0.6704445422535211,5
+Mean household risk score,0.8,0.75,0.964568661971831,5
+"GasSetu ranking, bookings only",0.6,0.5625,0.9770026408450705,5
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.9375,1.0,5
+Confirmation gap (old formula),0.13333333333333333,0.08,0.5,6
+Mean refills per household,0.6666666666666666,0.4,0.8330181818181819,6
+Mean household risk score,0.8666666666666667,0.52,0.9655272727272728,6
+"GasSetu ranking, bookings only",0.9333333333333333,0.56,0.9961454545454547,6
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.6,1.0,6
+Confirmation gap (old formula),0.06666666666666667,0.047619047619047616,0.5,7
+Mean refills per household,0.26666666666666666,0.19047619047619047,0.642515787677078,7
+Mean household risk score,1.0,0.7142857142857143,0.983273596176822,7
+"GasSetu ranking, bookings only",0.8666666666666667,0.6190476190476191,0.9275473630312341,7
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.7142857142857143,1.0,7
+Confirmation gap (old formula),0.13333333333333333,0.11764705882352941,0.5,8
+Mean refills per household,0.4,0.35294117647058826,0.7586780295156933,8
+Mean household risk score,1.0,0.8823529411764706,1.0,8
+"GasSetu ranking, bookings only",1.0,0.8823529411764706,0.9996882145084183,8
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.8823529411764706,1.0,8
+Confirmation gap (old formula),0.13333333333333333,0.1,0.5,9
+Mean refills per household,0.5333333333333333,0.4,0.8391964285714285,9
+Mean household risk score,0.9333333333333333,0.7,0.9546428571428571,9
+"GasSetu ranking, bookings only",0.8666666666666667,0.65,0.9895535714285715,9
+"GasSetu ranking, bookings + delivery confirmations",1.0,0.75,1.0,9

@@ -17,6 +17,11 @@ This module:
   - Generates audit reports for government/OMC review
   - Scores each distributor with a trust rating
 
+Known limit (build_plan.md §13.2, D23): this module counts confirmations. Since the delivery OTP
+(DAC) became mandatory, a diverted cylinder usually HAS a confirmation (the OTP is obtained by
+trick or collusion), so the gap stays at zero. Diversion of that kind is ranked from the PATTERN
+of bookings and confirmations instead: see core/inspection_ranking.py.
+
 Author: Athrva Raut — GasSetu Project
 """
 
@@ -192,9 +197,12 @@ class DistributorReconciliation:
     WARNING_THRESHOLD  = 5.0
     CRITICAL_THRESHOLD = 10.0
 
-    def __init__(self, distributor_id: str, distributor_name: str):
+    def __init__(self, distributor_id: str, distributor_name: str, cylinder_value_rs: Optional[float] = None):
         self.distributor_id   = distributor_id
         self.distributor_name = distributor_name
+        # Market value of one cylinder, used only to put a rupee figure on a gap. Prices change, so the
+        # caller supplies the current one; without it the reports state cylinder counts only.
+        self.cylinder_value_rs = cylinder_value_rs
         self.cylinders:  dict[str, CylinderRecord] = {}
         self.agents:     dict[str, AgentRecord]    = {}
         self.allocated:  int = 0
@@ -400,6 +408,8 @@ class DistributorReconciliation:
             })
 
         if unaccounted > 0:
+            value_note = (f" (estimated value ₹{unaccounted * self.cylinder_value_rs:,.0f})"
+                          if self.cylinder_value_rs else "")
             flags.append({
                 "type":        "STOCK_MISMATCH",
                 "severity":    "HIGH" if unaccounted > 5 else "MEDIUM",
@@ -408,7 +418,7 @@ class DistributorReconciliation:
                     f"{unaccounted} cylinders unaccounted for. "
                     f"Allocated: {self.allocated}, "
                     f"Verified+Returned+InTransit: {accounted}. "
-                    f"Gap: {unaccounted} cylinders (₹{unaccounted * 965:,} potential subsidy loss)."
+                    f"Gap: {unaccounted} cylinders{value_note}."
                 ),
             })
 
@@ -504,7 +514,8 @@ if __name__ == "__main__":
     print("  Simulating: Andheri Gas Agency, Mumbai")
     print("=" * 65)
 
-    recon = DistributorReconciliation("DIST-MUM-4221", "Andheri Gas Agency")
+    # 900 is an illustrative price for this demo; pass the current price of a 14.2 kg cylinder
+    recon = DistributorReconciliation("DIST-MUM-4221", "Andheri Gas Agency", cylinder_value_rs=900)
 
     # Register agents
     recon.register_agent("AGT-01", "Suresh Kumar",  "9876501001")
@@ -595,13 +606,9 @@ if __name__ == "__main__":
     print(f"\n📋 Recommendation:")
     print(f"   {report.recommendation}")
 
-    print(f"\n💰 Financial Impact:")
-    ghost_loss = report.ghost_deliveries * 965
-    unaccounted_loss = report.cylinders_unaccounted * 965
-    print(f"   Ghost delivery subsidy loss : ₹{ghost_loss:,}")
-    print(f"   Unaccounted cylinder loss   : ₹{unaccounted_loss:,}")
-    print(f"   Total today                 : ₹{ghost_loss + unaccounted_loss:,}")
-    print(f"   Projected monthly loss      : ₹{(ghost_loss + unaccounted_loss) * 26:,}")
+    print(f"\n💰 Estimated value at ₹{recon.cylinder_value_rs:,.0f} a cylinder (illustrative price):")
+    print(f"   Unconfirmed (ghost) deliveries : ₹{report.ghost_deliveries * recon.cylinder_value_rs:,.0f}")
+    print(f"   All unaccounted cylinders      : ₹{report.cylinders_unaccounted * recon.cylinder_value_rs:,.0f}")
 
     print("\n" + "=" * 65)
     print("  Distributor Reconciliation Engine ready.")

@@ -1,405 +1,264 @@
 """
-GasSetu — Consumption Anomaly Detection
-=========================================
-ML model that catches fraud the GSTN check cannot:
-  - Households selling their subsidised cylinder to restaurants
-  - Distributors creating artificial shortages
-  - Agents doing impossible delivery volumes
+GasSetu — Consumption Risk Model (Layer 3, v2)
+===============================================
+Scores one LPG connection from its booking history. Replaces the v1 Isolation Forest, which
+flagged whatever was rare: it rated genuine low-usage homes as CRITICAL and missed organised
+diversion (build_plan.md §13.2, D12/D16/D24).
 
-Uses Isolation Forest — unsupervised anomaly detection.
-Learns what NORMAL looks like, flags everything that isn't.
+How v2 works:
+  1. PEER GROUPS. A home is compared only with similar homes: PMUY or not, rural or urban,
+     household-size band. Twelve refills a year is ordinary for a joint family of nine and
+     unusual for a two-person PMUY home.
+  2. A SMALL, READABLE SCORE. Five inputs (below) are combined with weights fitted by logistic
+     regression. Every input can be shown to a reviewer as a sentence, and no weight is negative:
+     an input can only add concern, never hide it.
+  3. PERCENTILE. The score is turned into "higher than x% of connections" using a reference
+     population, and the tiers are cut on that percentile (HIGH = top 0.5%). Because the main input
+     is measured against similar homes, large families and low-usage homes are not flagged for
+     being what they are. experiments/consumption_eval.py reports the false-alarm rate per group,
+     and also what happens with a separate cut in every group (precision halves, parity is no better).
 
-No real data needed — trains on synthetic Indian LPG patterns.
+The model never blocks a booking. Its strongest tier (HIGH) means "a person should look".
+
+IMPORTANT: the weights and the reference population in consumption_model.json come from the
+simulator (core/synthetic_population.py), because no labelled LPG data is public. On real data both
+must be re-fitted: the peer statistics from the oil company's own population, the weights from
+inspection outcomes. Regenerate the file with:  python experiments/consumption_eval.py
 
 Author: Athrva — GasSetu Project
 """
 
-import numpy as np
 import json
+import os
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from dataclasses import dataclass
 from typing import Optional
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
+
+import numpy as np
+
+from core.features import FEATURE_NAMES, LOCK_DAYS, rate_jump
+
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumption_model.json")
+
+INPUT_NAMES = ["z_refills", "jump", "woke_up", "mobile_changes", "mobile_with_jump"]
+PERCENTILE_GRID = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 92, 94, 96, 98, 98.5, 99, 99.5, 99.8, 99.9, 100]
+TIERS = (("HIGH", 99.5), ("MEDIUM", 98.0), ("LOW", 90.0))        # percentile in the reference population
+MIN_GROUP = 300                                                    # smaller groups borrow from a wider one
+
+RECOMMENDATION = {
+    "HIGH":   "Send to the human review queue. The refill proceeds.",
+    "MEDIUM": "No action on this refill. Keep the connection on the watch list.",
+    "LOW":    "No action. Slightly unusual.",
+    "NORMAL": "No action. Ordinary pattern for similar households.",
+}
+
+
+# ─── PEER GROUPS ──────────────────────────────────────────────────────────────
+
+_BAND_EDGES, _BAND_LABELS = (2, 5, 8), ("1–2 people", "3–5 people", "6–8 people", "9 or more people")
+
+
+def peer_group(is_pmuy, is_rural, household_size) -> np.ndarray:
+    """Group id 0–15: PMUY × rural × household-size band."""
+    band = np.searchsorted(_BAND_EDGES, np.asarray(household_size), side="left")
+    return np.asarray(is_pmuy).astype(int) * 8 + np.asarray(is_rural).astype(int) * 4 + band
+
+
+def peer_label(group: int) -> str:
+    return f"{'PMUY' if group & 8 else 'non-PMUY'}, {'rural' if group & 4 else 'urban'}, {_BAND_LABELS[group & 3]}"
+
+
+def _group_masks(group: np.ndarray):
+    """
+    For each of the 16 groups, the households that stand in for it. A group with fewer than MIN_GROUP
+    members borrows from a wider one, keeping the household-size band as long as possible because
+    consumption depends on it most: same PMUY + band → same band → everyone.
+    """
+    for g in range(16):
+        for mask in (group == g, (group & 11) == (g & 11), (group & 3) == (g & 3), np.ones(len(group), bool)):
+            if mask.sum() >= MIN_GROUP:
+                break
+        yield g, mask
+
+
+def fit_peer_stats(features: dict) -> dict:
+    """Mean, spread and median of refills a year for every peer group."""
+    group = peer_group(features["is_pmuy"], features["is_rural"], features["household_size"])
+    refills = np.asarray(features["refills_12m"], float)
+    return {g: {"n": int(mask.sum()), "refills_mean": float(refills[mask].mean()),
+                "refills_sd": float(refills[mask].std()), "refills_median": float(np.median(refills[mask]))}
+            for g, mask in _group_masks(group)}
+
+
+def risk_inputs(features: dict, peer_stats: dict) -> np.ndarray:
+    """
+    The five model inputs, one row per connection.
+
+    z_refills         refills in 12 months, in standard deviations above similar households
+    jump              last 6 months against the connection's own earlier habit (square-root scale,
+                      so a home going from 0 to 1 refill does not look like a tenfold jump)
+    woke_up           silent for 8 months or more, then active again
+    mobile_changes    registered mobile number changed (capped at 2)
+    mobile_with_jump  ...and the refill rate jumped as well
+    """
+    f = {k: np.atleast_1d(np.asarray(features[k], float)) for k in FEATURE_NAMES}
+    group = peer_group(f["is_pmuy"], f["is_rural"], f["household_size"])
+    col = lambda key: np.array([peer_stats[int(g)][key] for g in group])
+
+    z_refills = (f["refills_12m"] - col("refills_mean")) / np.maximum(col("refills_sd"), 1.0)
+    jump = 2 * (np.sqrt(f["refills_6m"] + 0.375) - np.sqrt(f["refills_prev_18m"] / 3 + 0.375))
+    woke_up = (f["dormant_days"] >= 240) * np.minimum(f["refills_6m"], 6) / 6.0
+    mobile = np.minimum(f["mobile_changes_12m"], 2.0)
+    return np.column_stack([z_refills, jump, woke_up, mobile, mobile * (jump > 1.0)])
 
 
 # ─── RESULT STRUCTURE ─────────────────────────────────────────────────────────
 
 @dataclass
-class AnomalyResult:
+class ConsumptionRisk:
     consumer_id:      str
-    anomaly_detected: bool
-    anomaly_score:    float        # 0.0 to 1.0 — higher = more suspicious
-    risk_level:       str          # NORMAL | LOW | MEDIUM | HIGH | CRITICAL
-    flags:            list
+    risk_level:       str            # NORMAL | LOW | MEDIUM | HIGH
+    percentile:       float          # score is higher than this % of connections in the reference population
+    peer_group:       str
+    refills_12m:      int
+    peer_median:      float          # refills a year a typical similar household takes
+    reasons:          list           # [{"code": ..., "detail": ...}], readable by a reviewer
     recommendation:   str
-    checked_at:       str
+    model_version:    str
+    checked_at:       str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
-        return {
-            "consumer_id":      self.consumer_id,
-            "anomaly_detected": self.anomaly_detected,
-            "anomaly_score":    round(self.anomaly_score, 3),
-            "risk_level":       self.risk_level,
-            "flags":            self.flags,
-            "recommendation":   self.recommendation,
-            "checked_at":       self.checked_at,
-        }
+        return dict(self.__dict__)
 
 
-# ─── SYNTHETIC DATA GENERATOR ─────────────────────────────────────────────────
+# ─── MODEL ────────────────────────────────────────────────────────────────────
 
-def generate_synthetic_data(n_normal=8000, n_fraud=2000, seed=42):
+class ConsumptionRiskModel:
     """
-    Generate realistic Indian LPG booking patterns.
-
-    Normal household features:
-    - Books every 22-35 days
-    - 1-2 people per cylinder per month
-    - Consistent across seasons (slight winter increase)
-    - Same address, same agent usually
-
-    Fraud patterns we inject:
-    - Maximum booking frequency (every 15 days, the legal minimum)
-    - Single person household with family-level consumption
-    - Sudden change in booking frequency after months of normal
-    - Perfectly consistent booking (bot-like, no human variation)
-    """
-    np.random.seed(seed)
-
-    # ── NORMAL HOUSEHOLDS ─────────────────────────────────────────────────────
-    normal = np.column_stack([
-        np.random.normal(27, 4, n_normal),          # days_between_bookings (mean 27)
-        np.random.normal(2.3, 0.8, n_normal),       # household_size
-        np.random.normal(0.15, 0.1, n_normal),      # booking_frequency_change (low)
-        np.random.normal(0, 1, n_normal),            # address_change_count (rarely moves)
-        np.random.normal(28, 6, n_normal),           # days_since_last_booking
-        np.random.normal(0.1, 0.05, n_normal),      # agent_change_rate (same agent usually)
-        np.random.normal(12, 3, n_normal),           # bookings_last_12_months (normal ~12)
-        np.random.normal(0.05, 0.03, n_normal),     # complaint_rate (low)
-    ])
-
-    # ── FRAUD PATTERNS ────────────────────────────────────────────────────────
-
-    # Pattern 1: Cylinder sellers (book max frequency, sell to restaurants)
-    n_sellers = n_fraud // 4
-    sellers = np.column_stack([
-        np.random.normal(15.5, 0.8, n_sellers),    # books exactly at minimum (15 days)
-        np.random.normal(1.1, 0.2, n_sellers),     # single person but high consumption
-        np.random.normal(0.9, 0.1, n_sellers),     # high frequency change (suddenly books faster)
-        np.random.normal(0, 0.5, n_sellers),       # stays at same address
-        np.random.normal(15, 1, n_sellers),        # always 15 days between bookings
-        np.random.normal(0.8, 0.1, n_sellers),     # high agent change (different agents)
-        np.random.normal(24, 1, n_sellers),        # 24 bookings/year (max possible)
-        np.random.normal(0.02, 0.01, n_sellers),   # low complaints (transaction works)
-    ])
-
-    # Pattern 2: Ghost connections (distributor's fake customers)
-    n_ghost = n_fraud // 4
-    ghosts = np.column_stack([
-        np.random.normal(15.2, 0.3, n_ghost),     # perfectly regular (bot-like)
-        np.random.normal(0.0, 0.1, n_ghost),      # zero household size (no one lives there)
-        np.random.normal(0.95, 0.05, n_ghost),    # extremely consistent booking change
-        np.random.normal(3, 1, n_ghost),          # multiple address changes
-        np.random.normal(15.1, 0.2, n_ghost),     # near-perfect 15-day intervals
-        np.random.normal(0.95, 0.05, n_ghost),    # always different agent
-        np.random.normal(24, 0.5, n_ghost),       # maximum possible bookings
-        np.random.normal(0.001, 0.001, n_ghost),  # zero complaints (not real people)
-    ])
-
-    # Pattern 3: Dormant account hijack
-    n_hijack = n_fraud // 4
-    hijacks = np.column_stack([
-        np.random.normal(16, 1, n_hijack),         # suddenly books fast
-        np.random.normal(2.5, 0.5, n_hijack),     # appears normal size
-        np.random.normal(0.85, 0.1, n_hijack),    # major frequency change (key signal)
-        np.random.normal(1, 0.5, n_hijack),       # one address change (phone number swap)
-        np.random.normal(16, 1.5, n_hijack),      # new pattern emerging
-        np.random.normal(0.7, 0.2, n_hijack),     # agent changes (new distributor)
-        np.random.normal(22, 2, n_hijack),        # high bookings
-        np.random.normal(0.01, 0.01, n_hijack),  # low complaints
-    ])
-
-    # Pattern 4: Distributor black market (large-scale diversion)
-    n_dist = n_fraud // 4
-    distributors = np.column_stack([
-        np.random.normal(15.0, 0.1, n_dist),      # perfectly minimum interval
-        np.random.normal(4.5, 0.5, n_dist),       # inflated household size
-        np.random.normal(0.98, 0.02, n_dist),     # perfectly consistent
-        np.random.normal(0, 0.1, n_dist),         # never moves
-        np.random.normal(15.0, 0.1, n_dist),      # robotic precision
-        np.random.normal(0.99, 0.01, n_dist),     # always different agents
-        np.random.normal(24, 0.2, n_dist),        # maximum bookings
-        np.random.normal(0.0, 0.001, n_dist),     # zero complaints
-    ])
-
-    X = np.vstack([normal, sellers, ghosts, hijacks, distributors])
-    y = np.array([0] * n_normal + [1] * n_fraud)  # 0=normal, 1=fraud
-
-    return X, y
-
-
-# ─── ANOMALY DETECTOR ─────────────────────────────────────────────────────────
-
-class ConsumptionAnomalyDetector:
-    """
-    Isolation Forest trained on synthetic Indian LPG consumption patterns.
-    
     Usage:
-        detector = ConsumptionAnomalyDetector()
-        detector.train()
-        result = detector.check(consumer_id="CON-001", days_between=15, ...)
+        model = ConsumptionRiskModel.load()
+        risk = model.check("CON-001", refills_12m=13, refills_6m=7, refills_prev_18m=6, earliest_day_refills=8,
+                           dormant_days=40, household_size=2, is_pmuy=1, is_rural=1, mobile_changes_12m=1)
     """
 
-    FEATURE_NAMES = [
-        "days_between_bookings",
-        "household_size",
-        "booking_frequency_change",
-        "address_change_count",
-        "days_since_last_booking",
-        "agent_change_rate",
-        "bookings_last_12_months",
-        "complaint_rate",
-    ]
-
-    def __init__(self):
-        self.model    = None
-        self.scaler   = StandardScaler()
-        self.trained  = False
-
-    def train(self, verbose=True):
-        """Train the model on synthetic data."""
-        if verbose:
-            print("  Training anomaly detection model on synthetic LPG data...")
-
-        X, y = generate_synthetic_data()
-        X_scaled = self.scaler.fit_transform(X)
-
-        # Isolation Forest: contamination = expected fraud rate (~20%)
-        self.model = IsolationForest(
-            n_estimators  = 200,
-            contamination = 0.2,
-            random_state  = 42,
-            n_jobs        = -1,
-        )
-        self.model.fit(X_scaled)
+    def __init__(self, spec: dict):
+        self.spec = spec
+        self.version = spec["version"]
+        self.weights = np.array([spec["weights"][k] for k in INPUT_NAMES])
+        self.intercept = float(spec["intercept"])
+        self.peer_stats = {int(g): s for g, s in spec["peer_stats"].items()}
+        self.quantiles = np.array(spec["score_quantiles"])
         self.trained = True
 
-        if verbose:
-            # Evaluate on training data
-            preds = self.model.predict(X_scaled)
-            n_flagged = sum(1 for p in preds if p == -1)
-            print(f"  Model trained. Flagging {n_flagged}/{len(X)} samples as anomalies.")
-            print(f"  Expected fraud rate: 20% ({len(X) * 0.2:.0f} samples)")
+    # ── fitting (used by experiments/consumption_eval.py) ────────────────────
 
-    def check(
-        self,
-        consumer_id:                str,
-        days_between_bookings:      float,
-        household_size:             float,
-        booking_frequency_change:   float,   # 0.0-1.0: how much frequency changed recently
-        address_change_count:       int,
-        days_since_last_booking:    float,
-        agent_change_rate:          float,   # 0.0-1.0: how often agent changes
-        bookings_last_12_months:    int,
-        complaint_rate:             float,   # 0.0-1.0: complaints per booking
-    ) -> AnomalyResult:
-        """
-        Check one consumer's booking pattern for anomalies.
-        Returns AnomalyResult with risk level and specific flags.
-        """
-        if not self.trained:
-            raise RuntimeError("Model not trained. Call detector.train() first.")
+    @classmethod
+    def fit(cls, train_features: dict, train_labels, reference_features: dict, version: str, notes: Optional[dict] = None):
+        """Weights from a labelled population; peer statistics and percentile tables from a reference population."""
+        from sklearn.linear_model import LogisticRegression
 
-        features = np.array([[
-            days_between_bookings,
-            household_size,
-            booking_frequency_change,
-            address_change_count,
-            days_since_last_booking,
-            agent_change_rate,
-            bookings_last_12_months,
-            complaint_rate,
-        ]])
+        # Fit, drop any input whose weight comes out negative, and fit again: in a score a reviewer reads,
+        # an input may only add concern. (Booking on the first allowed day was dropped for this reason: genuine
+        # heavy users do it as often as diverters, so it carried no evidence beyond the refill count.)
+        X, y = risk_inputs(train_features, fit_peer_stats(train_features)), np.asarray(train_labels)
+        keep = np.ones(len(INPUT_NAMES), bool)
+        while True:
+            lr = LogisticRegression(C=1.0, class_weight="balanced", max_iter=2000).fit(X[:, keep], y)
+            if (lr.coef_[0] >= 0).all():
+                break
+            keep[np.flatnonzero(keep)[lr.coef_[0] < 0]] = False
+        weights = np.zeros(len(INPUT_NAMES))
+        weights[keep] = lr.coef_[0]
 
-        features_scaled = self.scaler.transform(features)
-        prediction      = self.model.predict(features_scaled)[0]   # 1=normal, -1=anomaly
-        raw_score       = self.model.score_samples(features_scaled)[0]
+        peer_stats = fit_peer_stats(reference_features)
+        spec = {
+            "version":     version,
+            "created":     datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "lock_days":   LOCK_DAYS,
+            "inputs":      INPUT_NAMES,
+            "weights":     {k: round(float(w), 4) for k, w in zip(INPUT_NAMES, weights)},
+            "intercept":   round(float(lr.intercept_[0]), 4),
+            "tiers":       {name: cut for name, cut in TIERS},
+            "percentile_grid": PERCENTILE_GRID,
+            "peer_stats":  {str(g): {k: round(v, 4) if isinstance(v, float) else v for k, v in s.items()}
+                            for g, s in peer_stats.items()},
+            "score_quantiles": [0.0] * len(PERCENTILE_GRID),
+            "notes":       notes or {},
+        }
+        score = cls(spec).raw_score(reference_features)
+        spec["score_quantiles"] = [round(float(q), 4) for q in np.percentile(score, PERCENTILE_GRID)]
+        return cls(spec)
 
-        # Convert score to 0-1 range (higher = more anomalous)
-        anomaly_score = max(0.0, min(1.0, (-raw_score - 0.1) / 0.6))
-        anomaly_detected = (prediction == -1)
+    def save(self, path: str = MODEL_PATH):
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.spec, fh, indent=1)
 
-        # ── Determine risk level ──────────────────────────────────────────────
-        if anomaly_score >= 0.85:   risk = "CRITICAL"
-        elif anomaly_score >= 0.65: risk = "HIGH"
-        elif anomaly_score >= 0.45: risk = "MEDIUM"
-        elif anomaly_score >= 0.25: risk = "LOW"
-        else:                        risk = "NORMAL"
+    @classmethod
+    def load(cls, path: str = MODEL_PATH):
+        with open(path, encoding="utf-8") as fh:
+            return cls(json.load(fh))
 
-        # ── Generate specific human-readable flags ────────────────────────────
-        flags = []
+    # ── scoring ──────────────────────────────────────────────────────────────
 
-        if days_between_bookings <= 16:
-            flags.append(
-                f"BOOKING_RATE_MAX: Booking every {days_between_bookings:.0f} days "
-                f"(minimum allowed: 15). Pattern matches cylinder resellers."
-            )
+    def raw_score(self, features: dict) -> np.ndarray:
+        """Weighted sum of the five inputs (a logit). Higher = more like the diversion patterns."""
+        return risk_inputs(features, self.peer_stats) @ self.weights + self.intercept
 
-        if bookings_last_12_months >= 22:
-            flags.append(
-                f"ANNUAL_VOLUME_HIGH: {bookings_last_12_months} bookings in 12 months. "
-                f"Normal household: 12-15. Max possible: 24."
-            )
+    def percentile(self, features: dict) -> np.ndarray:
+        """0–100: share of reference connections with a lower score (step function on the stored grid)."""
+        idx = np.searchsorted(self.quantiles, self.raw_score(features), side="right") - 1
+        return np.array(PERCENTILE_GRID, float)[np.clip(idx, 0, len(PERCENTILE_GRID) - 1)]
 
-        if booking_frequency_change >= 0.7:
-            flags.append(
-                f"SUDDEN_FREQUENCY_CHANGE: Booking pattern changed by "
-                f"{booking_frequency_change*100:.0f}%. "
-                f"Matches dormant account hijack or new resale activity."
-            )
+    @staticmethod
+    def tier(percentile: float) -> str:
+        for name, cut in TIERS:
+            if percentile >= cut:
+                return name
+        return "NORMAL"
 
-        if household_size <= 0.5 and bookings_last_12_months >= 18:
-            flags.append(
-                "SINGLE_PERSON_HIGH_VOLUME: Single/no occupant booking "
-                "at commercial-level frequency. Ghost connection likely."
-            )
+    def check(self, consumer_id: str, refills_12m: float, refills_6m: float, refills_prev_18m: float,
+              earliest_day_refills: float, dormant_days: float, household_size: float, is_pmuy: int,
+              is_rural: int, mobile_changes_12m: float = 0) -> ConsumptionRisk:
+        """Score one connection. The history numbers come from core/features.py, never from the consumer."""
+        features = dict(refills_12m=refills_12m, refills_6m=refills_6m, refills_prev_18m=refills_prev_18m,
+                        earliest_day_refills=earliest_day_refills, dormant_days=dormant_days,
+                        household_size=household_size, is_pmuy=is_pmuy, is_rural=is_rural,
+                        mobile_changes_12m=mobile_changes_12m)
+        features = {k: np.array([v], float) for k, v in features.items()}
+        group = int(peer_group(features["is_pmuy"], features["is_rural"], features["household_size"])[0])
+        stats = self.peer_stats[group]
+        percentile = float(self.percentile(features)[0])
+        level = self.tier(percentile)
+        z_refills, jump, woke_up, mobile, _ = risk_inputs(features, self.peer_stats)[0]
+        ratio = float(rate_jump(refills_6m, refills_prev_18m))
 
-        if agent_change_rate >= 0.8:
-            flags.append(
-                f"HIGH_AGENT_CHURN: Delivery agent changes {agent_change_rate*100:.0f}% "
-                f"of the time. Normal households have consistent agents. "
-                f"Matches distributor rotation to avoid detection."
-            )
+        reasons = []
+        if z_refills >= 2.0:
+            reasons.append({"code": "EXCESS_VS_PEERS", "detail":
+                            f"{refills_12m:.0f} refills in 12 months; similar households ({peer_label(group)}) "
+                            f"take about {stats['refills_median']:.0f}."})
+        if earliest_day_refills >= 6:
+            reasons.append({"code": "EARLIEST_DAY_BOOKING", "detail":
+                            f"{earliest_day_refills:.0f} of the last {refills_12m:.0f} refills were booked within "
+                            f"2 days of the {LOCK_DAYS}-day lock ending."})
+        if jump >= 1.5 and refills_6m >= 4:
+            reasons.append({"code": "SUDDEN_INCREASE", "detail":
+                            f"{refills_6m:.0f} refills in the last 6 months, {ratio:.1f} times this connection's earlier rate."})
+        if woke_up > 0 and refills_6m >= 3:
+            reasons.append({"code": "DORMANT_THEN_ACTIVE", "detail":
+                            f"No refill for {dormant_days:.0f} days, then {refills_6m:.0f} refills in 6 months."})
+        if mobile >= 1 and reasons:
+            reasons.append({"code": "MOBILE_CHANGED", "detail":
+                            f"Registered mobile number changed {mobile_changes_12m:.0f} time(s) in 12 months."})
 
-        if days_between_bookings <= 15.5 and abs(days_between_bookings - 15.0) < 0.8:
-            flags.append(
-                "ROBOTIC_PRECISION: Booking intervals are unnaturally precise. "
-                "Real households vary by ±3-5 days. Bot/automated booking suspected."
-            )
-
-        # ── Recommendation ────────────────────────────────────────────────────
-        if risk == "CRITICAL":
-            recommendation = "BLOCK_AND_AUDIT: Immediately suspend booking. Escalate for physical inspection."
-        elif risk == "HIGH":
-            recommendation = "FLAG_FOR_REVIEW: Allow booking but assign to human review queue within 24h."
-        elif risk == "MEDIUM":
-            recommendation = "MONITOR: Allow booking. Increase monitoring frequency. Flag if pattern continues."
-        elif risk == "LOW":
-            recommendation = "LOG: Minor anomaly noted. No action required. Pattern logged for trend analysis."
-        else:
-            recommendation = "CLEAR: Normal consumption pattern. No action required."
-
-        return AnomalyResult(
-            consumer_id      = consumer_id,
-            anomaly_detected = anomaly_detected,
-            anomaly_score    = anomaly_score,
-            risk_level       = risk,
-            flags            = flags,
-            recommendation   = recommendation,
-            checked_at       = datetime.now(timezone.utc).isoformat(),
+        return ConsumptionRisk(
+            consumer_id     = consumer_id,
+            risk_level      = level,
+            percentile      = percentile,
+            peer_group      = peer_label(group),
+            refills_12m     = int(refills_12m),
+            peer_median     = stats["refills_median"],
+            reasons         = reasons if level != "NORMAL" else [],
+            recommendation  = RECOMMENDATION[level],
+            model_version   = self.version,
         )
-
-
-# ─── DEMO ─────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-
-    print("\n" + "=" * 65)
-    print("  GASSETU — CONSUMPTION ANOMALY DETECTION")
-    print("=" * 65)
-
-    # Train the model
-    detector = ConsumptionAnomalyDetector()
-    detector.train(verbose=True)
-    print()
-
-    # Test cases — real-world Indian LPG fraud scenarios
-    test_cases = [
-        {
-            "label": "👨‍👩‍👧‍👦 Normal Mumbai family of 4",
-            "id":    "CON-NORMAL-001",
-            "data":  dict(
-                days_between_bookings    = 26,
-                household_size           = 4,
-                booking_frequency_change = 0.05,
-                address_change_count     = 0,
-                days_since_last_booking  = 28,
-                agent_change_rate        = 0.1,
-                bookings_last_12_months  = 13,
-                complaint_rate           = 0.0,
-            ),
-        },
-        {
-            "label": "🍽️  Restaurant owner booking on home name (FRAUD)",
-            "id":    "CON-FRAUD-001",
-            "data":  dict(
-                days_between_bookings    = 15.2,
-                household_size           = 1.5,
-                booking_frequency_change = 0.88,
-                address_change_count     = 0,
-                days_since_last_booking  = 15,
-                agent_change_rate        = 0.75,
-                bookings_last_12_months  = 24,
-                complaint_rate           = 0.01,
-            ),
-        },
-        {
-            "label": "👻 Ghost connection (Distributor SIM farm)",
-            "id":    "CON-GHOST-001",
-            "data":  dict(
-                days_between_bookings    = 15.0,
-                household_size           = 0.0,
-                booking_frequency_change = 0.97,
-                address_change_count     = 2,
-                days_since_last_booking  = 15.0,
-                agent_change_rate        = 0.98,
-                bookings_last_12_months  = 24,
-                complaint_rate           = 0.0,
-            ),
-        },
-        {
-            "label": "🔄 Dormant account hijacked by distributor",
-            "id":    "CON-HIJACK-001",
-            "data":  dict(
-                days_between_bookings    = 16,
-                household_size           = 2.5,
-                booking_frequency_change = 0.82,
-                address_change_count     = 1,
-                days_since_last_booking  = 16,
-                agent_change_rate        = 0.65,
-                bookings_last_12_months  = 22,
-                complaint_rate           = 0.01,
-            ),
-        },
-        {
-            "label": "🏠 Rural single person, slow bookings (genuine)",
-            "id":    "CON-RURAL-001",
-            "data":  dict(
-                days_between_bookings    = 38,
-                household_size           = 1.0,
-                booking_frequency_change = 0.05,
-                address_change_count     = 0,
-                days_since_last_booking  = 40,
-                agent_change_rate        = 0.05,
-                bookings_last_12_months  = 9,
-                complaint_rate           = 0.0,
-            ),
-        },
-    ]
-
-    for tc in test_cases:
-        result = detector.check(consumer_id=tc["id"], **tc["data"])
-        icon   = "🚨" if result.risk_level in ["CRITICAL","HIGH"] else "✅"
-        print(f"{icon}  {tc['label']}")
-        print(f"   Risk Level : {result.risk_level}  (Score: {result.anomaly_score:.2f})")
-        if result.flags:
-            for flag in result.flags[:2]:  # show first 2 flags
-                print(f"   ⚠️  {flag[:90]}...")
-        print(f"   Action     : {result.recommendation[:80]}...")
-        print()
-
-    print("=" * 65)
-    print("  Anomaly Detection ready.")
-    print("  Next: Connect to /booking/validate combined API endpoint")
-    print("=" * 65 + "\n")

@@ -95,6 +95,74 @@ def test_d5_reconciling_twice_gives_the_same_result():
     assert second.trust_score == first.trust_score, "distributor trust adjusted once per day"
 
 
+# ─── D22: every stored field is hashed; flags are chained; future dates; pick-up agent ───
+
+def test_d22_editing_any_stored_field_breaks_the_chain():
+    for field_name, forged in [("gps_accuracy", 9999), ("notes", "FORGED"), ("otp_verified", True), ("device_id", "X")]:
+        m = CylinderStateMachine("CYL-H")
+        m.transition(CylinderState.LOADED, timestamp=datetime(2026, 10, 1, 8, 0), gps_accuracy=20, notes="scan ok")
+        setattr(m.history[0], field_name, forged)
+        assert not m.verify_chain_integrity()["intact"], field_name
+
+
+def test_d22_the_otp_result_is_stored_with_the_event():
+    m = _journey()
+    t = datetime(2026, 10, 1, 9, 0)
+    m.transition(CylinderState.OUT_FOR_DELIVERY, timestamp=t)
+    m.transition(CylinderState.APPROACHING, timestamp=t + timedelta(minutes=20))
+    assert m.transition(CylinderState.CONFIRMED, timestamp=t + timedelta(minutes=25), otp_verified=True)["allowed"]
+    assert m.history[-1].otp_verified is True
+
+
+def test_d22_event_dated_in_the_future_is_rejected():
+    m = CylinderStateMachine("CYL-F")
+    result = m.transition(CylinderState.LOADED, timestamp=datetime.now(timezone.utc) + timedelta(days=365))
+    assert not result["allowed"] and result["fraud_flag"]["flag_type"] == "TIMESTAMP_IN_FUTURE"
+    ok = CylinderStateMachine("CYL-F2").transition(CylinderState.LOADED, timestamp=datetime.now(timezone.utc) + timedelta(minutes=2))
+    assert ok["allowed"], "a few minutes of clock drift is tolerated"
+
+
+def test_d22_a_rejected_attempt_is_written_into_the_chain_and_a_reviewer_can_clear_it():
+    m = CylinderStateMachine("CYL-R")
+    now = datetime.now(timezone.utc)
+    m.transition(CylinderState.LOADED, timestamp=now - timedelta(minutes=30))
+    m.transition(CylinderState.COMPLETE, timestamp=now - timedelta(minutes=20))        # a mistaken request
+    assert m.current_state == CylinderState.FLAGGED
+    assert m.history[-1].to_state == CylinderState.FLAGGED and m.history[-1].notes.startswith("ILLEGAL_TRANSITION")
+    del m.history[-1]                                                                    # try to hide the flag...
+    m.history.append(m.history[0])
+    assert not m.verify_chain_integrity()["intact"]                                      # ...the chain shows it
+
+    m = CylinderStateMachine("CYL-R2")
+    m.transition(CylinderState.LOADED, timestamp=now - timedelta(minutes=30))
+    m.transition(CylinderState.COMPLETE, timestamp=now - timedelta(minutes=20))
+    resolved = m.resolve_flag("REVIEWER-7", "duplicate scan")
+    assert resolved["resolved"] and m.current_state == CylinderState.LOADED
+    assert m.history[-1].agent_id == "REVIEWER-7" and "FLAG_RESOLVED" in m.history[-1].notes
+    assert m.transition(CylinderState.IN_TRANSIT, timestamp=datetime.now(timezone.utc))["allowed"], "the journey continues"
+    assert m.verify_chain_integrity()["intact"]
+    assert not m.resolve_flag("REVIEWER-7")["resolved"], "nothing left to resolve"
+
+
+def test_d22_cylinder_must_be_picked_up_by_the_agent_it_was_assigned_to():
+    m = _journey(3)
+    t = datetime(2026, 10, 1, 9, 0)
+    m.transition(CylinderState.ASSIGNED, timestamp=t, agent_id="AGT-01")
+    result = m.transition(CylinderState.OUT_FOR_DELIVERY, timestamp=t + timedelta(minutes=5), agent_id="AGT-99")
+    assert not result["allowed"] and result["fraud_flag"]["flag_type"] == "AGENT_MISMATCH"
+
+
+# ─── D11: no hard-coded rupee value ───────────────────────────────────────────
+
+def test_d11_rupee_value_appears_only_when_a_price_is_supplied():
+    def gap_text(**kw):
+        r = DistributorReconciliation("D", "Test", **kw)
+        r.allocate(10)
+        return next(f["description"] for f in r.reconcile().flags if f["type"] == "STOCK_MISMATCH")
+    assert "₹" not in gap_text()
+    assert "estimated value ₹9,000" in gap_text(cylinder_value_rs=900)
+
+
 # ─── D8: haversine distance ───────────────────────────────────────────────────
 
 def test_d8_haversine_known_distances():

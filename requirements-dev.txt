@@ -1,3 +1,7 @@
 -r requirements.txt
-pytest
-httpx
+# tests
+pytest>=8.0
+httpx>=0.27
+# experiments and model fitting (the API itself only reads core/consumption_model.json)
+scikit-learn>=1.4,<2
+pandas>=2.1

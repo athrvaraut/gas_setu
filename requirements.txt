@@ -1,7 +1,6 @@
-fastapi
-uvicorn
-requests
-python-dotenv
-scikit-learn
-numpy
-aiofiles
+fastapi>=0.110,<1.0
+uvicorn>=0.27,<1.0
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+numpy>=1.26,<3
+aiofiles>=23.0

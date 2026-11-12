@@ -1,0 +1,11 @@
+method,captured_connections,precision,recall,roc_auc
+"GasSetu ranking, bookings only",2,0.127 (0.000–0.333),0.076 (0.000–0.208),0.585 (0.470–0.672)
+"GasSetu ranking, bookings + delivery confirmations",2,0.273 (0.067–0.467),0.168 (0.067–0.304),0.766 (0.637–0.857)
+"GasSetu ranking, bookings only",4,0.133 (0.000–0.400),0.082 (0.000–0.171),0.666 (0.563–0.783)
+"GasSetu ranking, bookings + delivery confirmations",4,0.493 (0.267–0.800),0.321 (0.154–0.533),0.907 (0.874–0.967)
+"GasSetu ranking, bookings only",8,0.407 (0.200–0.667),0.266 (0.103–0.467),0.802 (0.624–0.884)
+"GasSetu ranking, bookings + delivery confirmations",8,0.900 (0.733–1.000),0.588 (0.371–0.800),0.992 (0.984–0.999)
+"GasSetu ranking, bookings only",16,0.720 (0.267–1.000),0.465 (0.190–0.667),0.936 (0.816–0.989)
+"GasSetu ranking, bookings + delivery confirmations",16,1.000 (1.000–1.000),0.661 (0.429–1.000),1.000 (1.000–1.000)
+"GasSetu ranking, bookings only",32,0.947 (0.667–1.000),0.623 (0.429–0.933),0.978 (0.915–1.000)
+"GasSetu ranking, bookings + delivery confirmations",32,1.000 (1.000–1.000),0.661 (0.429–1.000),1.000 (1.000–1.000)

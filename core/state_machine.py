@@ -13,7 +13,7 @@ Author: GasSetu
 """
 
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 import hashlib
@@ -73,17 +73,19 @@ LEGAL_TRANSITIONS = {
     CylinderState.APPROACHING:      [CylinderState.CONFIRMED, CylinderState.OUT_FOR_DELIVERY],  # OUT_FOR_DELIVERY = customer not home
     CylinderState.CONFIRMED:        [CylinderState.COMPLETE],
     CylinderState.COMPLETE:         [],  # Terminal state — no further transitions
-    CylinderState.FLAGGED:          [CylinderState.DISPUTED, CylinderState.CANCELLED],
+    CylinderState.FLAGGED:          [CylinderState.DISPUTED, CylinderState.CANCELLED],  # or resolve_flag() by a reviewer
     CylinderState.DISPUTED:         [CylinderState.COMPLETE, CylinderState.FLAGGED],
     CylinderState.CANCELLED:        [],  # Terminal state
 }
 
-# Transitions that REQUIRE extra validation before allowing
+# Transitions that need extra evidence before they are allowed (both are enforced in transition())
 HIGH_RISK_TRANSITIONS = {
-    (CylinderState.APPROACHING, CylinderState.CONFIRMED),    # Must have customer OTP
-    (CylinderState.CONFIRMED, CylinderState.COMPLETE),       # Must have agent GPS at address
-    (CylinderState.ASSIGNED, CylinderState.OUT_FOR_DELIVERY), # Must have agent scan
+    (CylinderState.APPROACHING, CylinderState.CONFIRMED),     # needs the customer's OTP (DAC)
+    (CylinderState.ASSIGNED, CylinderState.OUT_FOR_DELIVERY), # must be picked up by the agent it was assigned to
 }
+
+# An event may be dated this far ahead of the server clock (device clocks drift); anything later is rejected
+MAX_CLOCK_SKEW_SECONDS = 600
 
 
 # ─── DATA STRUCTURES ──────────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ class StateTransitionEvent:
     device_id:      Optional[str]     # Android device fingerprint
     notes:          Optional[str]
     prev_hash:      Optional[str]     # cryptographic chain — links to previous event
+    otp_verified:   bool = False      # the customer's OTP (DAC) was checked for this event
     event_hash:     str = field(default="", init=False)
 
     def __post_init__(self):
@@ -113,8 +116,7 @@ class StateTransitionEvent:
     def _compute_hash(self) -> str:
         """
         Cryptographic chain: each event hashes itself + previous event.
-        If ANY field is tampered with after creation — hash breaks.
-        This is what defeats the device clock manipulation attack.
+        EVERY stored field is in the hash, so editing any of them afterwards breaks it.
         """
         payload = {
             "cylinder_id":   self.cylinder_id,
@@ -124,9 +126,12 @@ class StateTransitionEvent:
             "agent_id":      self.agent_id,
             "gps_lat":       self.gps_lat,
             "gps_lng":       self.gps_lng,
+            "gps_accuracy":  self.gps_accuracy,
             "accelerometer": self.accelerometer,
             "cell_tower_id": self.cell_tower_id,
             "device_id":     self.device_id,
+            "notes":         self.notes,
+            "otp_verified":  self.otp_verified,
             "prev_hash":     self.prev_hash,
         }
         raw = json.dumps(payload, sort_keys=True)
@@ -171,6 +176,10 @@ class CylinderStateMachine:
         result = machine.transition(CylinderState.LOADED, agent_id="AGT-001", ...)
         if not result["allowed"]:
             print(result["fraud_flag"])
+
+    A rejected attempt moves the cylinder to FLAGGED and is itself written into the hash chain,
+    so a flag cannot be quietly removed. A reviewer puts the cylinder back on its journey with
+    resolve_flag(); that action is chained too.
     """
 
     def __init__(self, cylinder_id: str, initial_state: CylinderState = CylinderState.FILLED):
@@ -180,6 +189,7 @@ class CylinderStateMachine:
         self.flags:    list[FraudFlag]             = []
         self.created_at     = _utc()
         self.last_updated   = self.created_at
+        self._state_before_flag: Optional[CylinderState] = None
 
     # ── CORE TRANSITION METHOD ────────────────────────────────────────────────
 
@@ -202,10 +212,11 @@ class CylinderStateMachine:
         Returns: { "allowed": bool, "new_state": str, "fraud_flag": dict|None }
         """
         timestamp = _utc(timestamp)
+        blocked = lambda flag: {"allowed": False, "new_state": self.current_state, "fraud_flag": flag.to_dict()}
 
         # ── CHECK 1: Is this transition legally allowed? ──────────────────────
         if to_state not in LEGAL_TRANSITIONS.get(self.current_state, []):
-            flag = self._raise_flag(
+            return blocked(self._raise_flag(
                 flag_type   = "ILLEGAL_TRANSITION",
                 severity    = "CRITICAL",
                 description = (
@@ -220,22 +231,36 @@ class CylinderStateMachine:
                     "to_state":     to_state,
                     "legal_options": [s for s in LEGAL_TRANSITIONS[self.current_state]],
                 },
-            )
-            return {"allowed": False, "new_state": self.current_state, "fraud_flag": flag.to_dict()}
+                attempted_at = timestamp,
+            ))
 
-        # ── CHECK 2: High-risk transitions need extra validation ──────────────
+        # ── CHECK 2: High-risk transitions need extra evidence ────────────────
         transition_pair = (self.current_state, to_state)
 
-        if transition_pair == (CylinderState.APPROACHING, CylinderState.CONFIRMED):
-            if not otp_verified:
-                flag = self._raise_flag(
-                    flag_type   = "CONFIRMATION_WITHOUT_OTP",
+        if transition_pair == (CylinderState.APPROACHING, CylinderState.CONFIRMED) and not otp_verified:
+            return blocked(self._raise_flag(
+                flag_type   = "CONFIRMATION_WITHOUT_OTP",
+                severity    = "HIGH",
+                description = "Delivery marked CONFIRMED without customer OTP verification.",
+                agent_id    = agent_id,
+                evidence    = {"otp_verified": False},
+                attempted_at = timestamp,
+            ))
+
+        if transition_pair == (CylinderState.ASSIGNED, CylinderState.OUT_FOR_DELIVERY):
+            assigned_to = self.history[-1].agent_id if self.history else None
+            if assigned_to is not None and agent_id != assigned_to:
+                return blocked(self._raise_flag(
+                    flag_type   = "AGENT_MISMATCH",
                     severity    = "HIGH",
-                    description = "Delivery marked CONFIRMED without customer OTP verification.",
+                    description = (
+                        f"Cylinder was assigned to {assigned_to} but picked up by "
+                        f"{agent_id or 'an unidentified agent'}."
+                    ),
                     agent_id    = agent_id,
-                    evidence    = {"otp_verified": False},
-                )
-                return {"allowed": False, "new_state": self.current_state, "fraud_flag": flag.to_dict()}
+                    evidence    = {"assigned_to": assigned_to, "picked_up_by": agent_id},
+                    attempted_at = timestamp,
+                ))
 
         # ── CHECK 3: GPS accuracy check ───────────────────────────────────────
         if gps_accuracy and gps_accuracy > 500:
@@ -252,14 +277,13 @@ class CylinderStateMachine:
         # ── CHECK 4: Mock location detection (sensor fusion) ──────────────────
         mock_flag = self._detect_mock_location(gps_lat, gps_lng, gps_accuracy, accelerometer)
         if mock_flag:
-            flag = self._raise_flag(**mock_flag, agent_id=agent_id)
-            return {"allowed": False, "new_state": self.current_state, "fraud_flag": flag.to_dict()}
+            return blocked(self._raise_flag(**mock_flag, agent_id=agent_id, attempted_at=timestamp))
 
         # ── CHECK 5: Time sequence integrity ──────────────────────────────────
         if self.history:
             last_event = self.history[-1]
             if timestamp < last_event.timestamp:
-                flag = self._raise_flag(
+                return blocked(self._raise_flag(
                     flag_type   = "TIMESTAMP_REVERSAL",
                     severity    = "CRITICAL",
                     description = (
@@ -271,15 +295,25 @@ class CylinderStateMachine:
                         "new_timestamp":  timestamp.isoformat(),
                         "last_timestamp": last_event.timestamp.isoformat(),
                     },
-                )
-                return {"allowed": False, "new_state": self.current_state, "fraud_flag": flag.to_dict()}
+                    attempted_at = timestamp,
+                ))
+
+        ahead = (timestamp - _utc()).total_seconds()
+        if ahead > MAX_CLOCK_SKEW_SECONDS:
+            return blocked(self._raise_flag(
+                flag_type   = "TIMESTAMP_IN_FUTURE",
+                severity    = "HIGH",
+                description = (
+                    f"Event is dated {ahead / 60:.0f} minutes ahead of the server clock. "
+                    f"Device clock was set forward."
+                ),
+                agent_id    = agent_id,
+                evidence    = {"new_timestamp": timestamp.isoformat(), "seconds_ahead": round(ahead)},
+                attempted_at = timestamp,
+            ))
 
         # ── ALL CHECKS PASSED — Execute transition ─────────────────────────────
-        prev_hash = self.history[-1].event_hash if self.history else None
-
-        event = StateTransitionEvent(
-            cylinder_id   = self.cylinder_id,
-            from_state    = self.current_state,
+        event = self._append_event(
             to_state      = to_state,
             timestamp     = timestamp,
             agent_id      = agent_id,
@@ -290,12 +324,8 @@ class CylinderStateMachine:
             cell_tower_id = cell_tower_id,
             device_id     = device_id,
             notes         = notes,
-            prev_hash     = prev_hash,
+            otp_verified  = otp_verified,
         )
-
-        self.history.append(event)
-        self.current_state = to_state
-        self.last_updated  = timestamp
 
         return {
             "allowed":    True,
@@ -303,6 +333,19 @@ class CylinderStateMachine:
             "event_hash": event.event_hash,
             "fraud_flag": None,
         }
+
+    def resolve_flag(self, reviewer_id: str, note: str = "") -> dict:
+        """
+        A reviewer clears a flag (a mistaken scan, a retried request) and the cylinder returns to
+        the state it had before. Recorded in the chain with the reviewer's id.
+        """
+        if self.current_state != CylinderState.FLAGGED or self._state_before_flag is None:
+            return {"resolved": False, "new_state": self.current_state, "error": "Cylinder is not flagged."}
+        restored = self._state_before_flag
+        self._state_before_flag = None
+        event = self._append_event(to_state=restored, timestamp=self._not_before_last(_utc()),
+                                   agent_id=reviewer_id, notes=f"FLAG_RESOLVED: {note}".strip())
+        return {"resolved": True, "new_state": self.current_state, "event_hash": event.event_hash}
 
     # ── MOCK LOCATION DETECTION ───────────────────────────────────────────────
 
@@ -316,6 +359,7 @@ class CylinderStateMachine:
         """
         Sensor fusion check: GPS movement must correlate with accelerometer movement.
         If GPS shows movement but accelerometer shows stillness → mock location app.
+        A weak signal that has not been evaluated yet (ROADMAP step 29).
         """
         if not self.history or gps_lat is None or gps_lng is None:
             return None
@@ -385,8 +429,44 @@ class CylinderStateMachine:
 
     # ── HELPERS ───────────────────────────────────────────────────────────────
 
-    def _raise_flag(self, flag_type, severity, description, agent_id, evidence, block: bool = True) -> FraudFlag:
-        """Record a flag. Only blocking flags move the cylinder to FLAGGED; log-only flags leave its state alone."""
+    def _not_before_last(self, timestamp: datetime) -> datetime:
+        """Timestamp for an event the server writes itself: not ahead of the server clock, not before the last event."""
+        timestamp = min(timestamp, _utc() + timedelta(seconds=MAX_CLOCK_SKEW_SECONDS))
+        if self.history:
+            timestamp = max(timestamp, self.history[-1].timestamp)
+        return timestamp
+
+    def _append_event(self, to_state: CylinderState, timestamp: datetime, agent_id: Optional[str] = None,
+                      gps_lat=None, gps_lng=None, gps_accuracy=None, accelerometer=None, cell_tower_id=None,
+                      device_id=None, notes=None, otp_verified: bool = False) -> StateTransitionEvent:
+        """Write one event at the end of the chain and move the cylinder to `to_state`."""
+        event = StateTransitionEvent(
+            cylinder_id   = self.cylinder_id,
+            from_state    = self.current_state,
+            to_state      = to_state,
+            timestamp     = timestamp,
+            agent_id      = agent_id,
+            gps_lat       = gps_lat,
+            gps_lng       = gps_lng,
+            gps_accuracy  = gps_accuracy,
+            accelerometer = accelerometer,
+            cell_tower_id = cell_tower_id,
+            device_id     = device_id,
+            notes         = notes,
+            prev_hash     = self.history[-1].event_hash if self.history else None,
+            otp_verified  = otp_verified,
+        )
+        self.history.append(event)
+        self.current_state = to_state
+        self.last_updated  = timestamp
+        return event
+
+    def _raise_flag(self, flag_type, severity, description, agent_id, evidence, block: bool = True,
+                    attempted_at: Optional[datetime] = None) -> FraudFlag:
+        """
+        Record a flag. A blocking flag moves the cylinder to FLAGGED and writes that into the hash
+        chain; a log-only flag (block=False) leaves the cylinder's state alone.
+        """
         flag = FraudFlag(
             cylinder_id = self.cylinder_id,
             flag_type   = flag_type,
@@ -398,7 +478,11 @@ class CylinderStateMachine:
         )
         self.flags.append(flag)
         if block:
-            self.current_state = CylinderState.FLAGGED
+            if self.current_state != CylinderState.FLAGGED:
+                self._state_before_flag = self.current_state
+            self._append_event(to_state=CylinderState.FLAGGED,
+                               timestamp=self._not_before_last(attempted_at or _utc()),
+                               agent_id=agent_id, notes=f"{flag_type}: {description}")
         return flag
 
     def get_summary(self) -> dict:

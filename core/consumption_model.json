@@ -1,0 +1,176 @@
+{
+ "version": "2.0-sim",
+ "created": "2026-11-12",
+ "lock_days": 25,
+ "inputs": [
+  "z_refills",
+  "jump",
+  "woke_up",
+  "mobile_changes",
+  "mobile_with_jump"
+ ],
+ "weights": {
+  "z_refills": 2.0298,
+  "jump": 0.6459,
+  "woke_up": 0.8182,
+  "mobile_changes": 0.7884,
+  "mobile_with_jump": 2.4214
+ },
+ "intercept": -2.063,
+ "tiers": {
+  "HIGH": 99.5,
+  "MEDIUM": 98.0,
+  "LOW": 90.0
+ },
+ "percentile_grid": [
+  0,
+  10,
+  20,
+  30,
+  40,
+  50,
+  60,
+  70,
+  80,
+  90,
+  92,
+  94,
+  96,
+  98,
+  98.5,
+  99,
+  99.5,
+  99.8,
+  99.9,
+  100
+ ],
+ "peer_stats": {
+  "0": {
+   "n": 8027,
+   "refills_mean": 4.6724,
+   "refills_sd": 2.556,
+   "refills_median": 4.0
+  },
+  "1": {
+   "n": 29147,
+   "refills_mean": 6.6681,
+   "refills_sd": 2.6956,
+   "refills_median": 6.0
+  },
+  "2": {
+   "n": 10628,
+   "refills_mean": 8.0513,
+   "refills_sd": 2.7428,
+   "refills_median": 8.0
+  },
+  "3": {
+   "n": 1991,
+   "refills_mean": 9.229,
+   "refills_sd": 2.6164,
+   "refills_median": 10.0
+  },
+  "4": {
+   "n": 5225,
+   "refills_mean": 4.062,
+   "refills_sd": 2.3612,
+   "refills_median": 4.0
+  },
+  "5": {
+   "n": 18634,
+   "refills_mean": 5.8687,
+   "refills_sd": 2.5554,
+   "refills_median": 6.0
+  },
+  "6": {
+   "n": 6603,
+   "refills_mean": 7.1496,
+   "refills_sd": 2.6804,
+   "refills_median": 7.0
+  },
+  "7": {
+   "n": 1244,
+   "refills_mean": 8.0965,
+   "refills_sd": 2.7104,
+   "refills_median": 8.0
+  },
+  "8": {
+   "n": 1104,
+   "refills_mean": 3.3659,
+   "refills_sd": 2.5943,
+   "refills_median": 3.0
+  },
+  "9": {
+   "n": 3881,
+   "refills_mean": 4.7967,
+   "refills_sd": 2.6283,
+   "refills_median": 4.0
+  },
+  "10": {
+   "n": 1424,
+   "refills_mean": 5.8167,
+   "refills_sd": 2.9653,
+   "refills_median": 6.0
+  },
+  "11": {
+   "n": 1507,
+   "refills_mean": 6.9675,
+   "refills_sd": 3.0821,
+   "refills_median": 7.0
+  },
+  "12": {
+   "n": 5211,
+   "refills_mean": 3.3786,
+   "refills_sd": 2.4376,
+   "refills_median": 3.0
+  },
+  "13": {
+   "n": 18750,
+   "refills_mean": 4.7697,
+   "refills_sd": 2.6243,
+   "refills_median": 4.0
+  },
+  "14": {
+   "n": 6624,
+   "refills_mean": 5.9111,
+   "refills_sd": 2.9169,
+   "refills_median": 6.0
+  },
+  "15": {
+   "n": 1250,
+   "refills_mean": 6.952,
+   "refills_sd": 3.064,
+   "refills_median": 7.0
+  }
+ },
+ "score_quantiles": [
+  -10.805,
+  -4.6599,
+  -3.8432,
+  -3.2509,
+  -2.7192,
+  -2.202,
+  -1.6403,
+  -1.0135,
+  -0.2552,
+  0.8592,
+  1.1177,
+  1.5115,
+  1.9824,
+  2.8072,
+  3.0577,
+  3.6719,
+  4.6767,
+  5.7958,
+  6.5709,
+  12.5991
+ ],
+ "notes": {
+  "data": "SIMULATED (core/synthetic_population.py). Re-fit on real data before any real use.",
+  "weights_fitted_on": "Scenario.random(101), 120,000 households",
+  "reference_population": "Scenario(seed=7), 120,000 households",
+  "evaluation": "10 seeds, train and test worlds drawn separately, review budget 0.5%",
+  "precision_at_budget_mean": 0.641,
+  "recall_at_budget_mean": 0.201,
+  "pr_auc_mean": 0.368
+ }
+}

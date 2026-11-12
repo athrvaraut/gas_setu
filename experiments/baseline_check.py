@@ -1,8 +1,8 @@
-"""Baselines on the v1 synthetic data (README "Measured performance"). Run from repo root: python experiments/baseline_check.py"""
+"""Baselines on the RETIRED v1 synthetic data (why v1 was replaced; see experiments/consumption_eval.py for v2). Run from repo root: python experiments/baseline_check.py"""
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import numpy as np
-from core.anomaly_detection import generate_synthetic_data
+from experiments.legacy_v1 import generate_synthetic_data
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier

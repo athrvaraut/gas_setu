@@ -1,0 +1,6 @@
+method,precision,recall,roc_auc
+Confirmation gap (old formula),0.100 (0.000–0.267),0.073 (0.000–0.190),0.500 (0.500–0.500)
+Mean refills per household,0.487 (0.200–0.733),0.337 (0.188–0.476),0.763 (0.643–0.839)
+Mean household risk score,0.940 (0.800–1.000),0.677 (0.455–0.882),0.980 (0.955–1.000)
+"GasSetu ranking, bookings only",0.873 (0.600–1.000),0.627 (0.424–0.882),0.970 (0.902–1.000)
+"GasSetu ranking, bookings + delivery confirmations",1.000 (1.000–1.000),0.723 (0.455–0.938),1.000 (1.000–1.000)

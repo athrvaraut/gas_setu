@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GasSetu — National LPG Fraud Detection</title>
+<title>GasSetu — LPG diversion risk scoring</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
@@ -689,6 +689,22 @@
 
 <div class="grid-bg"></div>
 
+<style>
+  /* ── v2 additions: outcomes other than green/red, history strip ─────── */
+  .result-box.review  { background: #ffd70010; border-color: #ffd70044; display: block; }
+  .result-box.monitor { background: #4db8ff10; border-color: #4db8ff44; display: block; }
+  .preset-btn.note    { border-color: #4db8ff44; color: var(--blue); background: #4db8ff08; }
+  .preset-group-label { font-family: var(--mono); font-size: 10px; color: var(--muted); margin: 8px 0 4px; }
+  .check-row { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+  .check-row label { font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .history-strip { position: relative; height: 26px; margin: 10px 0 2px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); }
+  .history-strip span { position: absolute; top: 5px; width: 3px; height: 14px; border-radius: 2px; background: var(--accent); }
+  .history-caption { font-family: var(--mono); font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; }
+  .reason-item { padding: 8px 10px; background: var(--surface); border-radius: 8px; margin-bottom: 6px; font-size: 12px; color: var(--text); }
+  .reason-code { font-family: var(--mono); font-size: 10px; color: var(--muted); display: block; margin-bottom: 2px; }
+  .demo-banner { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
+</style>
+
 <div class="shell">
 
   <!-- TOPBAR -->
@@ -697,20 +713,14 @@
       <div class="logo-icon">🔥</div>
       <div>
         <div class="logo-text">GasSetu</div>
-        <div class="logo-sub">National LPG Platform · GOI</div>
+        <div class="logo-sub">LPG diversion risk scoring · student research prototype</div>
       </div>
-    </div>
-
-    <div class="topbar-center">
-      <button class="nav-btn active" onclick="showSection('dashboard')">Dashboard</button>
-      <button class="nav-btn" onclick="showSection('validator')">Validator</button>
-      <button class="nav-btn" onclick="showSection('about')">About</button>
     </div>
 
     <div class="topbar-right">
       <div class="status-pill">
         <div class="status-dot"></div>
-        All Systems Live
+        <span id="status-text">Checking API…</span>
       </div>
       <div class="clock" id="clock">--:--:--</div>
     </div>
@@ -718,15 +728,15 @@
 
   <!-- HERO -->
   <div class="hero">
-    <div class="hero-badge">🛡️ Real-Time Fraud Detection Engine · v1.0</div>
+    <div class="hero-badge">🛡️ Risk scoring for human review · v2.0 · not a government system</div>
     <h1 class="hero-title">
-      Stop LPG Fraud<br><span>Before It Happens</span>
+      Find Where to Look,<br><span>Never Refuse a Home Its Gas</span>
     </h1>
     <p class="hero-sub">
       In March–April 2026 enforcement teams ran more than 1.28 lakh raids and seized over
       59,000 diverted cylinders (Business Standard, 14 Apr 2026).
-      GasSetu scores every booking in real time and sends suspicious ones to human review,
-      before a cylinder moves.
+      GasSetu scores a booking against registry records and the connection's own history,
+      and sends unusual cases to a person. A household's refill always goes ahead.
     </p>
   </div>
 
@@ -734,18 +744,18 @@
   <div class="stats-row">
     <div class="stat-card">
       <div class="stat-label">Active Domestic LPG Consumers</div>
-      <div class="stat-value red" id="stat1">32.94 Cr</div>
+      <div class="stat-value red">32.94 Cr</div>
       <div class="stat-delta">PIB, as on 1 Mar 2025</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Enforcement Raids (Mar–Apr 2026)</div>
-      <div class="stat-value orange" id="stat2">1.28 lakh</div>
+      <div class="stat-value orange">1.28 lakh</div>
       <div class="stat-delta">59,000+ cylinders seized</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">DAC-Confirmed Deliveries</div>
-      <div class="stat-value green" id="stat3">94.5%</div>
-      <div class="stat-delta">Apr 2026; mandatory from 1 May</div>
+      <div class="stat-label">Refills a Year, Ujjwala Homes</div>
+      <div class="stat-value green">4.71</div>
+      <div class="stat-delta">FY 2025-26, reply in Parliament</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">API Round-Trip (this session)</div>
@@ -762,7 +772,7 @@
       <div class="card-header">
         <div class="card-title">
           <div class="card-title-icon" style="background:#ff6b1a18">🔍</div>
-          Live Booking Validator
+          Booking Check
         </div>
         <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">
           POST /booking/validate
@@ -770,45 +780,40 @@
       </div>
       <div class="card-body">
 
-        <!-- PRESETS -->
-        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Quick Test Scenarios</div>
-        <div class="presets">
-          <button class="preset-btn fraud" onclick="loadPreset('restaurant_fraud')">🍽️ Restaurant Fraud</button>
-          <button class="preset-btn fraud" onclick="loadPreset('stolen_gstin')">🕵️ Stolen GSTIN</button>
-          <button class="preset-btn fraud" onclick="loadPreset('cylinder_seller')">📦 Cylinder Seller</button>
-          <button class="preset-btn clean" onclick="loadPreset('normal_household')">🏠 Normal Household</button>
-          <button class="preset-btn clean" onclick="loadPreset('commercial_correct')">✅ Commercial OK</button>
+        <div class="demo-banner">
+          Every person, business and GSTIN in these scenarios is fictional. Booking histories are made up.
         </div>
 
+        <!-- PRESETS (filled from /demo/profiles) -->
+        <div id="presets"></div>
+
         <!-- FORM -->
-        <div class="form-grid">
+        <div class="form-grid" style="margin-top:12px">
           <div class="form-group">
-            <label class="form-label">Consumer Name</label>
-            <input class="form-input" id="f_name" placeholder="e.g. Sharma Restaurant" />
+            <label class="form-label" for="f_name">Consumer Name</label>
+            <input class="form-input" id="f_name" />
           </div>
           <div class="form-group">
-            <label class="form-label">GSTIN (if business)</label>
-            <input class="form-input" id="f_gstin" placeholder="Leave blank if household" />
+            <label class="form-label" for="f_gstin">GSTIN (only if declared)</label>
+            <input class="form-input" id="f_gstin" placeholder="Leave blank for a household" />
           </div>
           <div class="form-group full">
-            <label class="form-label">Address</label>
-            <input class="form-input" id="f_address" placeholder="e.g. Shop 4, Andheri Market, Mumbai" />
+            <label class="form-label" for="f_address">Delivery Address</label>
+            <input class="form-input" id="f_address" />
           </div>
           <div class="form-group">
-            <label class="form-label">Pincode</label>
-            <input class="form-input" id="f_pincode" placeholder="400053" />
+            <label class="form-label" for="f_pincode">Pincode</label>
+            <input class="form-input" id="f_pincode" inputmode="numeric" maxlength="6" />
           </div>
           <div class="form-group">
-            <label class="form-label">State Code</label>
-            <select class="form-input" id="f_state">
-              <option value="27">27 — Maharashtra</option>
-              <option value="07">07 — Delhi</option>
-              <option value="29">29 — Karnataka</option>
-              <option value="33">33 — Tamil Nadu</option>
-              <option value="19">19 — West Bengal</option>
-              <option value="24">24 — Gujarat</option>
-            </select>
+            <label class="form-label" for="f_household">Household Size</label>
+            <input class="form-input" id="f_household" type="number" value="4" min="1" max="30"/>
           </div>
+        </div>
+
+        <div class="check-row">
+          <label><input type="checkbox" id="f_pmuy"> Ujjwala (PMUY) connection</label>
+          <label><input type="checkbox" id="f_rural"> Rural</label>
         </div>
 
         <!-- CYLINDER TYPE -->
@@ -817,43 +822,49 @@
           <div class="radio-group">
             <div class="radio-option selected" id="r_domestic" onclick="selectType('domestic')">
               🏠 Domestic<br>
-              <span style="font-size:10px;opacity:0.7;">14.2 kg · ₹913 · 5% GST</span>
+              <span style="font-size:10px;opacity:0.7;">14.2 kg · 5% GST</span>
             </div>
             <div class="radio-option" id="r_commercial" onclick="selectType('commercial')">
               🏪 Commercial<br>
-              <span style="font-size:10px;opacity:0.7;">19 kg · ₹2,079 · 18% GST</span>
+              <span style="font-size:10px;opacity:0.7;">19 kg · 18% GST</span>
             </div>
           </div>
         </div>
 
-        <!-- ADVANCED TOGGLE -->
-        <details style="margin-bottom:14px">
-          <summary style="font-family:var(--mono);font-size:10px;color:var(--muted);cursor:pointer;text-transform:uppercase;letter-spacing:1px;list-style:none;">
-            ▶ Advanced — Consumption Pattern (for ML model)
-          </summary>
-          <div class="form-grid" style="margin-top:10px">
-            <div class="form-group">
-              <label class="form-label">Days Between Bookings</label>
-              <input class="form-input" id="f_days" type="number" value="27" min="1" max="90"/>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Household Size</label>
-              <input class="form-input" id="f_household" type="number" value="3" min="0" max="10"/>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Bookings (Last 12 months)</label>
-              <input class="form-input" id="f_bookings12" type="number" value="13" min="0" max="24"/>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Frequency Change (0–1)</label>
-              <input class="form-input" id="f_freqchange" type="number" value="0.05" min="0" max="1" step="0.01"/>
-            </div>
+        <!-- BOOKING HISTORY -->
+        <div class="form-label">Booking history (comes from the booking system, not from the consumer)</div>
+        <div class="history-strip" id="history-strip" title="Each bar is one refill"></div>
+        <div class="history-caption"><span>24 months ago</span><span id="history-count"></span><span>today</span></div>
+        <div class="form-grid" style="margin-top:10px">
+          <div class="form-group">
+            <label class="form-label" for="f_r12">Refills, last 12 months</label>
+            <input class="form-input" id="f_r12" type="number" min="0" max="15"/>
           </div>
-        </details>
+          <div class="form-group">
+            <label class="form-label" for="f_r6">Refills, last 6 months</label>
+            <input class="form-input" id="f_r6" type="number" min="0" max="8"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="f_prev18">Refills, 18 months before that</label>
+            <input class="form-input" id="f_prev18" type="number" min="0" max="22"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="f_early">Booked the day the lock ended</label>
+            <input class="form-input" id="f_early" type="number" min="0" max="15"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="f_dormant">Longest silence (days)</label>
+            <input class="form-input" id="f_dormant" type="number" min="0" max="730"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="f_mobile">Mobile number changes, 12 months</label>
+            <input class="form-input" id="f_mobile" type="number" value="0" min="0" max="9"/>
+          </div>
+        </div>
 
         <button class="submit-btn" id="submit-btn" onclick="validateBooking()">
           <div class="btn-inner">
-            <span id="btn-text">⚡ Run Fraud Detection</span>
+            <span id="btn-text">⚡ Check this booking</span>
           </div>
         </button>
 
@@ -868,16 +879,16 @@
           </div>
           <div class="result-details">
             <div class="result-row">
-              <div class="result-row-label">Reason</div>
+              <div class="result-row-label">What happens</div>
+              <div class="result-row-value" id="result-proceed"></div>
+            </div>
+            <div class="result-row">
+              <div class="result-row-label">Main reason</div>
               <div class="result-row-value" id="result-reason"></div>
             </div>
             <div class="result-row">
-              <div class="result-row-label">Risk Level</div>
-              <div class="result-row-value" id="result-risk"></div>
-            </div>
-            <div class="result-row">
-              <div class="result-row-label">Confidence</div>
-              <div class="result-row-value" id="result-confidence"></div>
+              <div class="result-row-label">Next step</div>
+              <div class="result-row-value" id="result-action"></div>
             </div>
           </div>
           <div class="checks-list" id="result-checks"></div>
@@ -887,80 +898,77 @@
       </div>
     </div>
 
-    <!-- RIGHT: SYSTEM LAYERS + FEED -->
+    <!-- RIGHT -->
     <div style="display:flex;flex-direction:column;gap:20px">
 
-      <!-- FRAUD DETECTION LAYERS -->
+      <!-- LAYERS -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">
             <div class="card-title-icon" style="background:#4db8ff18">⚙️</div>
-            Detection Layers
+            What runs on a booking
           </div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--green);">5 Active</div>
         </div>
         <div class="card-body" style="padding:14px">
           <div class="layers-grid">
             <div class="layer-item">
               <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">1</div>
               <div>
-                <div class="layer-name">GSTN Format Check</div>
-                <div class="layer-desc">Validates 15-char GSTIN format · Saves API credits</div>
+                <div class="layer-name">GSTIN format and check digit</div>
+                <div class="layer-desc">No API call · catches mistyped and invented numbers</div>
               </div>
-              <div class="layer-badge" style="background:#00e5a015;color:var(--green)">Free · Fast</div>
+              <div class="layer-badge" style="background:#00e5a015;color:var(--green)">In the API</div>
             </div>
             <div class="layer-item">
               <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">2</div>
               <div>
-                <div class="layer-name">Live GSTN Database</div>
-                <div class="layer-desc">Real-time check against Indian govt tax database</div>
+                <div class="layer-name">Registry check</div>
+                <div class="layer-desc">Active? Whose name? Registered at this address? A food business?</div>
               </div>
-              <div class="layer-badge" style="background:#4db8ff15;color:var(--blue)">Live API</div>
+              <div class="layer-badge" style="background:#00e5a015;color:var(--green)">In the API</div>
             </div>
             <div class="layer-item">
               <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">3</div>
               <div>
-                <div class="layer-name">Identity Match</div>
-                <div class="layer-desc">Booking name vs GSTIN owner (legal + trade)</div>
+                <div class="layer-name">Consumption risk</div>
+                <div class="layer-desc">History compared with similar households · fitted on simulated data</div>
               </div>
-              <div class="layer-badge" style="background:#ffd70015;color:var(--yellow)">Anti-Theft</div>
+              <div class="layer-badge" style="background:#00e5a015;color:var(--green)">In the API</div>
             </div>
             <div class="layer-item">
               <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">4</div>
               <div>
-                <div class="layer-name">ML Anomaly Detection</div>
-                <div class="layer-desc">Isolation Forest trained on synthetic data · real-data validation in progress</div>
+                <div class="layer-name">Decision policy</div>
+                <div class="layer-desc">Strongest outcome any layer asks for · never holds a household refill</div>
               </div>
-              <div class="layer-badge" style="background:#b388ff15;color:#b388ff">ML Model</div>
+              <div class="layer-badge" style="background:#00e5a015;color:var(--green)">In the API</div>
             </div>
             <div class="layer-item">
-              <div class="layer-num" style="background:#ff6b1a18;color:var(--accent)">5</div>
+              <div class="layer-num" style="background:#8a94a618;color:var(--muted)">5</div>
               <div>
-                <div class="layer-name">Delivery Chain</div>
-                <div class="layer-desc">Cryptographic state machine · Catches ghost deliveries</div>
+                <div class="layer-name">Delivery chain and agent ranking</div>
+                <div class="layer-desc">Hash-chained delivery log · inspection ranking of delivery agents</div>
               </div>
-              <div class="layer-badge" style="background:#ff333515;color:var(--red)">Anti-Ghost</div>
+              <div class="layer-badge" style="background:#ffd70015;color:var(--yellow)">Modules, tested</div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- LIVE FRAUD FEED -->
+      <!-- OUTCOMES -->
       <div class="card" style="flex:1">
         <div class="card-header">
           <div class="card-title">
-            <div class="card-title-icon" style="background:#ff333518">🚨</div>
-            Live Fraud Feed
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--red);">
-            <div style="width:6px;height:6px;border-radius:50%;background:var(--red);animation:pulse 1.5s infinite"></div>
-            Simulated
+            <div class="card-title-icon" style="background:#00e5a018">🧭</div>
+            The five outcomes
           </div>
         </div>
         <div class="card-body" style="padding:14px">
-          <div class="feed-list" id="feed-list">
-            <!-- populated by JS -->
-          </div>
+          <div class="reason-item"><span class="reason-code">CLEAR</span>Nothing to note. The booking proceeds.</div>
+          <div class="reason-item"><span class="reason-code">MONITOR</span>Logged. Nobody needs to act on this booking.</div>
+          <div class="reason-item"><span class="reason-code">REVIEW</span>The booking proceeds and a person looks at the case. This is the strongest outcome the consumption model can cause.</div>
+          <div class="reason-item"><span class="reason-code">HOLD_FOR_REVIEW</span>Waits for a person, within 24 hours. Commercial bookings only, when the business identity fails verification.</div>
+          <div class="reason-item"><span class="reason-code">CONVERT_TO_COMMERCIAL</span>An active GSTIN for a food business is registered at the delivery address: a commercial cylinder is offered. The customer can appeal.</div>
         </div>
       </div>
 
@@ -985,49 +993,40 @@
       </div>
     </div>
 
-    <!-- FRAUD TYPES PIE -->
+    <!-- MEASURED RESULTS -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">
-          <div class="card-title-icon" style="background:#ff6b1a18">🧭</div>
-          Fraud Types Covered
+          <div class="card-title-icon" style="background:#ff6b1a18">🧪</div>
+          Measured on simulated data
         </div>
       </div>
       <div class="card-body">
-        <div style="display:flex;flex-direction:column;gap:10px">
-          <div id="fraud-bars"></div>
+        <div style="font-size:12px;color:var(--text);line-height:1.6">
+          No labelled LPG fraud data is public, so the consumption model is tested on a simulator built from
+          published averages. With reviewers able to look at 0.5% of connections, in ten train/test worlds:
+        </div>
+        <div id="results-list" style="margin-top:10px"></div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:8px">
+          Share of reviewed cases that were real diversion · mean (range) over 10 seeds ·
+          experiments/consumption_eval.py · not a measurement of real fraud
         </div>
       </div>
     </div>
 
-    <!-- INDIA IMPACT -->
+    <!-- LIMITS -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">
-          <div class="card-title-icon" style="background:#4db8ff18">🇮🇳</div>
-          National Impact
+          <div class="card-title-icon" style="background:#4db8ff18">⚠️</div>
+          What this prototype cannot do
         </div>
       </div>
       <div class="card-body">
-        <div style="display:flex;flex-direction:column;gap:14px">
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">LPG Connections</div>
-            <div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--heading)">33 Crore</div>
-            <div style="font-size:12px;color:var(--muted)">Households across India</div>
-          </div>
-          <div style="height:1px;background:var(--border)"></div>
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Monthly Bookings</div>
-            <div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--accent)">5 Crore</div>
-            <div style="font-size:12px;color:var(--muted)">Each one validated by GasSetu</div>
-          </div>
-          <div style="height:1px;background:var(--border)"></div>
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Distributors Monitored</div>
-            <div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--green)">25,600</div>
-            <div style="font-size:12px;color:var(--muted)">Real-time reconciliation</div>
-          </div>
-        </div>
+        <div class="reason-item">It has no real booking data. A pilot with an oil company or a distributor is needed before any claim about real fraud.</div>
+        <div class="reason-item">A business that never declares a GSTIN is found only by its name. Address-based discovery is planned.</div>
+        <div class="reason-item">A household that sells part of its own quota looks like any heavy user. The model finds few of these.</div>
+        <div class="reason-item">Cheaters who spread their bookings out are harder to find; the experiments measure how much.</div>
       </div>
     </div>
 
@@ -1036,12 +1035,12 @@
   <!-- FOOTER -->
   <footer class="footer">
     <div class="footer-left">
-      GasSetu v1.0 · Built by Athrva Raut · Bharati Vidyapeeth, Navi Mumbai
+      GasSetu v2.0 · B.Tech (AIML) project · Bharati Vidyapeeth (Deemed to be University), Navi Mumbai
     </div>
     <div class="footer-links">
       <a class="footer-link" href="/docs" target="_blank">API Docs</a>
       <a class="footer-link" href="/health" target="_blank">Health</a>
-      <a class="footer-link" href="https://github.com" target="_blank">GitHub</a>
+      <a class="footer-link" href="https://github.com/athrvaraut/gas_setu" target="_blank" rel="noopener">GitHub</a>
     </div>
   </footer>
 
@@ -1051,97 +1050,121 @@
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const API_BASE = window.location.origin;
 let selectedType = 'domestic';
+let PROFILES = {};
+
+const $ = id => document.getElementById(id);
+// Build an element with text set through textContent, so nothing typed into the form is ever parsed as HTML
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
 // ── CLOCK ─────────────────────────────────────────────────────────────────────
 function updateClock() {
-  const now = new Date();
-  document.getElementById('clock').textContent =
-    now.toLocaleTimeString('en-IN', { hour12: false });
+  $('clock').textContent = new Date().toLocaleTimeString('en-IN', { hour12: false });
 }
 setInterval(updateClock, 1000);
 updateClock();
 
 // ── PRESETS ───────────────────────────────────────────────────────────────────
-const PRESETS = {
-  restaurant_fraud: {
-    name: 'Sharma Restaurant', gstin: '27AAPFU0939F1ZV',
-    address: 'Shop 4, Andheri Market, Mumbai', pincode: '400053',
-    state: '27', type: 'domestic',
-    days: 15.2, household: 1.5, bookings12: 24, freqchange: 0.88
-  },
-  stolen_gstin: {
-    name: 'Rahul Sharma', gstin: '27AAPFU0939F1ZV',
-    address: 'Flat 5A, Bandra West, Mumbai', pincode: '400050',
-    state: '27', type: 'domestic',
-    days: 27, household: 2, bookings12: 13, freqchange: 0.05
-  },
-  cylinder_seller: {
-    name: 'Meena Devi', gstin: '',
-    address: 'Flat 2B, Kurla East, Mumbai', pincode: '400024',
-    state: '27', type: 'domestic',
-    days: 15.1, household: 1.0, bookings12: 24, freqchange: 0.92
-  },
-  normal_household: {
-    name: 'Priya Sharma', gstin: '',
-    address: 'Flat 12B, Kandivali West, Mumbai', pincode: '400067',
-    state: '27', type: 'domestic',
-    days: 26, household: 4, bookings12: 13, freqchange: 0.05
-  },
-  commercial_correct: {
-    name: 'Dishant Mahajan', gstin: '27AAPFU0939F1ZV',
-    address: 'Highway Road, Pune', pincode: '411001',
-    state: '27', type: 'commercial',
-    days: 3, household: 0, bookings12: 24, freqchange: 0.1
+const GROUPS = [
+  ['household',  'Ordinary households',          'clean'],
+  ['suspicious', 'Unusual booking histories',    'fraud'],
+  ['registry',   'Bookings that declare a GSTIN', 'note'],
+];
+
+async function loadProfiles() {
+  const box = $('presets');
+  try {
+    const list = await (await fetch(`${API_BASE}/demo/profiles`)).json();
+    list.forEach(p => { PROFILES[p.key] = p; });
+    box.replaceChildren();
+    GROUPS.forEach(([group, label, style]) => {
+      box.appendChild(el('div', 'preset-group-label', label));
+      const row = el('div', 'presets');
+      list.filter(p => p.group === group).forEach(p => {
+        const btn = el('button', `preset-btn ${style}`, p.label);
+        btn.addEventListener('click', () => loadPreset(p.key));
+        row.appendChild(btn);
+      });
+      box.appendChild(row);
+    });
+    loadPreset('captured_connection');
+  } catch {
+    box.replaceChildren(el('div', 'preset-group-label', 'Scenarios could not be loaded. The form still works.'));
   }
-};
+}
+
+function drawHistory(dates) {
+  const strip = $('history-strip');
+  strip.replaceChildren();
+  const today = Date.now();
+  (dates || []).forEach(d => {
+    const daysAgo = (today - new Date(d).getTime()) / 86400000;
+    if (daysAgo < 0 || daysAgo > 730) return;
+    const bar = document.createElement('span');
+    bar.style.left = `calc(${(1 - daysAgo / 730) * 100}% - 2px)`;
+    strip.appendChild(bar);
+  });
+  $('history-count').textContent = dates && dates.length ? `${dates.length} refills in 24 months` : 'no history supplied';
+}
 
 function loadPreset(key) {
-  const p = PRESETS[key];
-  document.getElementById('f_name').value       = p.name;
-  document.getElementById('f_gstin').value      = p.gstin;
-  document.getElementById('f_address').value    = p.address;
-  document.getElementById('f_pincode').value    = p.pincode;
-  document.getElementById('f_state').value      = p.state;
-  document.getElementById('f_days').value       = p.days;
-  document.getElementById('f_household').value  = p.household;
-  document.getElementById('f_bookings12').value = p.bookings12;
-  document.getElementById('f_freqchange').value = p.freqchange;
-  selectType(p.type);
-  // Clear previous result
-  document.getElementById('result-box').className = 'result-box';
+  const p = PROFILES[key];
+  if (!p) return;
+  const h = p.history || {};
+  $('f_name').value      = p.consumer_name;
+  $('f_gstin').value     = p.consumer_gstin || '';
+  $('f_address').value   = p.address;
+  $('f_pincode').value   = p.pincode;
+  $('f_household').value = p.household_size;
+  $('f_pmuy').checked    = !!p.is_pmuy;
+  $('f_rural').checked   = !!p.is_rural;
+  $('f_mobile').value    = p.mobile_changes_12m || 0;
+  $('f_r12').value       = h.refills_12m ?? '';
+  $('f_r6').value        = h.refills_6m ?? '';
+  $('f_prev18').value    = h.refills_prev_18m ?? '';
+  $('f_early').value     = h.earliest_day_refills ?? '';
+  $('f_dormant').value   = h.dormant_days ?? '';
+  drawHistory(p.refill_dates);
+  selectType(p.cylinder_type);
+  $('result-box').className = 'result-box';
 }
 
 function selectType(type) {
   selectedType = type;
-  document.getElementById('r_domestic').className   = 'radio-option' + (type === 'domestic'   ? ' selected' : '');
-  document.getElementById('r_commercial').className = 'radio-option' + (type === 'commercial' ? ' selected' : '');
+  $('r_domestic').className   = 'radio-option' + (type === 'domestic'   ? ' selected' : '');
+  $('r_commercial').className = 'radio-option' + (type === 'commercial' ? ' selected' : '');
 }
 
 // ── VALIDATE ──────────────────────────────────────────────────────────────────
-async function validateBooking() {
-  const btn = document.getElementById('submit-btn');
-  const btnText = document.getElementById('btn-text');
+const num = id => ($(id).value === '' ? null : Number($(id).value));
 
+async function validateBooking() {
+  const btn = $('submit-btn');
   btn.disabled = true;
-  btnText.innerHTML = '<span class="spinner"></span> Checking...';
+  $('btn-text').textContent = 'Checking…';
 
   const payload = {
-    consumer_id:               'CON-DEMO-' + Math.floor(Math.random() * 9999),
-    consumer_name:             document.getElementById('f_name').value || 'Test Consumer',
-    address:                   document.getElementById('f_address').value || 'Test Address',
-    pincode:                   document.getElementById('f_pincode').value || '400001',
-    state_code:                document.getElementById('f_state').value || '27',
-    cylinder_type:             selectedType,
-    company:                   'indane',
-    consumer_gstin:            document.getElementById('f_gstin').value || null,
-    days_between_bookings:     parseFloat(document.getElementById('f_days').value)     || 27,
-    household_size:            parseFloat(document.getElementById('f_household').value)|| 3,
-    booking_frequency_change:  parseFloat(document.getElementById('f_freqchange').value)||0.05,
-    address_change_count:      0,
-    days_since_last_booking:   parseFloat(document.getElementById('f_days').value)     || 27,
-    agent_change_rate:         0.1,
-    bookings_last_12_months:   parseInt(document.getElementById('f_bookings12').value) || 13,
-    complaint_rate:            0.0,
+    consumer_id:          'CON-DEMO-' + Math.floor(Math.random() * 9999),
+    consumer_name:        $('f_name').value || 'Test Consumer',
+    address:              $('f_address').value || 'Test Address',
+    pincode:              $('f_pincode').value || '400001',
+    state_code:           '',
+    cylinder_type:        selectedType,
+    company:              'indane',
+    consumer_gstin:       $('f_gstin').value.trim() || null,
+    household_size:       num('f_household') || 4,
+    is_pmuy:              $('f_pmuy').checked,
+    is_rural:             $('f_rural').checked,
+    mobile_changes_12m:   num('f_mobile') || 0,
+    refills_12m:          num('f_r12'),
+    refills_6m:           num('f_r6'),
+    refills_prev_18m:     num('f_prev18'),
+    earliest_day_refills: num('f_early'),
+    dormant_days:         num('f_dormant'),
   };
 
   try {
@@ -1151,213 +1174,107 @@ async function validateBooking() {
       body: JSON.stringify(payload)
     });
     const data = await res.json();
+    if (!res.ok) throw new Error((data.detail && data.detail[0] && data.detail[0].msg) || 'The API rejected the input.');
     showResult(data);
-    addToFeed(payload, data);
   } catch (err) {
     showError(err);
   } finally {
     btn.disabled = false;
-    btnText.innerHTML = '⚡ Run Fraud Detection';
+    $('btn-text').textContent = '⚡ Check this booking';
   }
 }
+
+const OUTCOMES = {
+  CLEAR:                 ['approved', '✅', 'CLEAR'],
+  MONITOR:               ['monitor',  '👁️', 'MONITOR'],
+  REVIEW:                ['review',   '🔎', 'REVIEW'],
+  HOLD_FOR_REVIEW:       ['blocked',  '⏸️', 'HOLD FOR REVIEW'],
+  CONVERT_TO_COMMERCIAL: ['blocked',  '🏪', 'CONVERT TO COMMERCIAL'],
+};
 
 function showResult(data) {
-  const box        = document.getElementById('result-box');
-  const isBlocked  = data.decision === 'BLOCKED';
+  const [style, icon, title] = OUTCOMES[data.decision] || ['monitor', '❔', data.decision];
+  $('result-box').className = 'result-box ' + style;
+  $('result-icon').textContent       = icon;
+  $('result-decision').textContent   = title;
+  $('result-booking-id').textContent = 'Booking ID: ' + (data.booking_id || 'N/A');
+  $('result-proceed').textContent    = data.proceed
+    ? 'The booking goes ahead.' + (data.review_within_hours ? ` A person reviews the case within ${data.review_within_hours} hours.` : '')
+    : (data.decision === 'CONVERT_TO_COMMERCIAL'
+        ? 'A commercial cylinder is offered instead. The customer can appeal.'
+        : `The booking waits for a person, within ${data.review_within_hours} hours.`);
+  $('result-reason').textContent = data.primary_reason || '—';
+  $('result-action').textContent = data.recommended_action || '—';
+  $('result-time').textContent   = `Processed in ${data.processing_ms?.toFixed(1) || '?'} ms · model ${data.model_version}`;
 
-  box.className = 'result-box ' + (isBlocked ? 'blocked' : 'approved');
-
-  document.getElementById('result-icon').textContent      = isBlocked ? '🚫' : '✅';
-  document.getElementById('result-decision').textContent  = isBlocked ? 'BLOCKED' : 'APPROVED';
-  document.getElementById('result-booking-id').textContent= 'Booking ID: ' + (data.booking_id || 'N/A');
-  document.getElementById('result-reason').textContent    = data.primary_reason || '—';
-  document.getElementById('result-risk').textContent      = data.risk_level || '—';
-  document.getElementById('result-confidence').textContent= data.confidence || '—';
-  document.getElementById('result-time').textContent      =
-    `Processed in ${data.processing_ms?.toFixed(1) || '?'}ms`;
-
-  // Checks
-  const checksList = document.getElementById('result-checks');
-  checksList.innerHTML = '';
-  if (data.checks_run && data.checks_run.length > 0) {
-    const header = document.createElement('div');
-    header.style.cssText = 'font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px';
-    header.textContent = 'Checks Run';
-    checksList.appendChild(header);
-
-    data.checks_run.forEach(check => {
-      const item = document.createElement('div');
-      item.className = 'check-item';
-      const icon = check.passed ? '✅' : (check.severity === 'PASS' ? '✅' : '❌');
-      item.innerHTML = `
-        <span class="check-status">${icon}</span>
-        <div>
-          <div class="check-name">${check.check_name || ''}</div>
-          <div class="check-detail">${check.detail || ''}</div>
-        </div>`;
-      checksList.appendChild(item);
-    });
-  }
-}
-
-function showError(err) {
-  const box = document.getElementById('result-box');
-  box.className = 'result-box blocked';
-  document.getElementById('result-icon').textContent     = '⚠️';
-  document.getElementById('result-decision').textContent = 'CONNECTION ERROR';
-  document.getElementById('result-booking-id').textContent = '';
-  document.getElementById('result-reason').textContent   =
-    'Could not reach API. If on Render free tier, the service may be waking up (takes ~30s). Retry in a moment.';
-  document.getElementById('result-risk').textContent     = '—';
-  document.getElementById('result-confidence').textContent = '—';
-  document.getElementById('result-checks').innerHTML     = '';
-  document.getElementById('result-time').textContent     = '';
-}
-
-// ── LIVE FEED ─────────────────────────────────────────────────────────────────
-const FEED_ITEMS = [
-  { icon:'🍽️', name:'Lucky Dhaba, Pune',         type:'Domestic→Commercial',  badge:'critical', time:'2m ago'  },
-  { icon:'🕵️', name:'Raj Enterprises, Mumbai',  type:'Stolen GSTIN',         badge:'high',     time:'5m ago'  },
-  { icon:'📦', name:'Sunita Devi, Nagpur',       type:'Cylinder Reseller',    badge:'high',     time:'8m ago'  },
-  { icon:'🏭', name:'Distributor #4421, Noida',  type:'Ghost Deliveries ×14', badge:'critical', time:'12m ago' },
-  { icon:'👻', name:'SIM Farm, Andheri',         type:'Ghost Connections',    badge:'critical', time:'15m ago' },
-  { icon:'🔄', name:'Dormant Account, Bandra',   type:'Account Hijack',       badge:'high',     time:'19m ago' },
-];
-
-function buildFeed() {
-  const list = document.getElementById('feed-list');
-  list.innerHTML = '';
-  FEED_ITEMS.forEach((item, i) => {
-    const div = document.createElement('div');
-    div.className = `feed-item ${item.badge}`;
-    div.style.animationDelay = (i * 0.06) + 's';
-    div.innerHTML = `
-      <span class="feed-icon">${item.icon}</span>
-      <div style="flex:1">
-        <div class="feed-name">${item.name}<span class="feed-badge badge-${item.badge}">${item.badge}</span></div>
-        <div class="feed-type">${item.type}</div>
-      </div>
-      <div class="feed-time">${item.time}</div>`;
-    list.appendChild(div);
+  const list = $('result-checks');
+  list.replaceChildren();
+  (data.checks_run || []).forEach(check => {
+    const item = el('div', 'reason-item');
+    item.appendChild(el('span', 'reason-code', `${check.check_name}: ${check.outcome}`));
+    item.appendChild(document.createTextNode(check.detail || ''));
+    list.appendChild(item);
   });
 }
 
-function addToFeed(payload, data) {
-  const list = document.getElementById('feed-list');
-  const isBlocked = data.decision === 'BLOCKED';
-  if (!isBlocked) return;
-
-  const newItem = document.createElement('div');
-  newItem.className = 'feed-item critical';
-  newItem.innerHTML = `
-    <span class="feed-icon">🚨</span>
-    <div style="flex:1">
-      <div class="feed-name">${payload.consumer_name}<span class="feed-badge badge-critical">just now</span></div>
-      <div class="feed-type">Live Detection · ${data.risk_level}</div>
-    </div>
-    <div class="feed-time">0s ago</div>`;
-  list.insertBefore(newItem, list.firstChild);
+function showError(err) {
+  $('result-box').className = 'result-box blocked';
+  $('result-icon').textContent       = '⚠️';
+  $('result-decision').textContent   = 'COULD NOT CHECK';
+  $('result-booking-id').textContent = '';
+  $('result-proceed').textContent    = '—';
+  $('result-reason').textContent     = String(err.message || err);
+  $('result-action').textContent     = 'If this is the free hosting tier, the service may be waking up (about 30 s). Try again.';
+  $('result-checks').replaceChildren();
+  $('result-time').textContent       = '';
 }
 
-// ── FRAUD BARS ────────────────────────────────────────────────────────────────
-function buildFraudBars() {
-  const container = document.getElementById('fraud-bars');
-  // Which layer handles each fraud type. No percentages: there is no measured breakdown yet.
-  const types = [
-    { label: 'Domestic→Commercial Misuse', layer: 'GSTN check (declared GSTIN)',   color: 'var(--red)' },
-    { label: 'Ghost Deliveries',           layer: 'Delivery chain + reconciliation', color: 'var(--accent)' },
-    { label: 'Cylinder Reselling',         layer: 'ML consumption model',          color: 'var(--yellow)' },
-    { label: 'Stolen GSTIN Identity',      layer: 'Name vs legal / trade name',    color: 'var(--blue)' },
-    { label: 'Ghost / Duplicate Accounts', layer: 'ML consumption model',          color: '#b388ff' },
-  ];
-  container.innerHTML = types.map(t => `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:8px 10px;background:var(--surface);border-radius:8px;border-left:3px solid ${t.color}">
-      <span style="font-size:12px;color:var(--text)">${t.label}</span>
-      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);text-align:right">${t.layer}</span>
-    </div>
-  `).join('') + `<div style="font-family:var(--mono);font-size:10px;color:var(--muted)">Undeclared-GSTIN businesses: PAN/FSSAI discovery planned (roadmap step 20)</div>`;
+// ── MEASURED RESULTS (experiments/results/household_models_summary.csv) ───────
+const RESULTS = [["Rule: count refills", "0.11 (0.00–0.53)"], ["Isolation Forest (the old method)", "0.21 (0.06–0.64)"], ["Rule: refills above similar homes", "0.62 (0.37–0.90)"], ["GasSetu v2 score (readable)", "0.64 (0.44–0.91)"], ["Random forest (needs labels, black box)", "0.78 (0.52–0.97)"]];
+function buildResults() {
+  const box = $('results-list');
+  RESULTS.forEach(([label, value]) => {
+    const row = el('div', 'reason-item');
+    row.style.display = 'flex';
+    row.style.justifyContent = 'space-between';
+    row.appendChild(el('span', '', label));
+    const v = el('span', '', value);
+    v.style.fontFamily = 'var(--mono)';
+    row.appendChild(v);
+    box.appendChild(row);
+  });
 }
 
 // ── HEALTH CHECK ──────────────────────────────────────────────────────────────
 async function checkHealth() {
-  const container = document.getElementById('health-content');
+  const box = $('health-content');
   try {
     const t0   = performance.now();
-    const res  = await fetch(`${API_BASE}/health`);
-    const data = await res.json();
-    const ms   = Math.round(performance.now() - t0);
-    document.getElementById('stat4').textContent = `${ms} ms`;
-    document.getElementById('stat4-note').textContent = 'measured just now on /health';
-    container.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:10px;text-align:left">
-        <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface);border-radius:8px">
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">STATUS</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--green)">● ${data.status?.toUpperCase()}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface);border-radius:8px">
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">VERSION</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${data.version}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--surface);border-radius:8px">
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">ML MODEL</span>
-          <span style="font-family:var(--mono);font-size:11px;color:${data.model_trained ? 'var(--green)' : 'var(--red)'}">${data.model_trained ? '● TRAINED' : '○ NOT READY'}</span>
-        </div>
-        <div style="padding:8px 12px;background:var(--surface);border-radius:8px">
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Active Checks</div>
-          ${(data.checks_active || []).map(c =>
-            `<div style="font-family:var(--mono);font-size:11px;color:var(--green);margin-bottom:3px">✓ ${c}</div>`
-          ).join('')}
-        </div>
-      </div>`;
+    const data = await (await fetch(`${API_BASE}/health`)).json();
+    $('stat4').textContent = `${Math.round(performance.now() - t0)} ms`;
+    $('stat4-note').textContent = 'measured just now on /health';
+    $('status-text').textContent = 'API running';
+    box.replaceChildren();
+    box.style.textAlign = 'left';
+    [['STATUS', (data.status || '').toUpperCase()], ['VERSION', data.version], ['MODEL', data.model_version],
+     ['MODEL DATA', data.model_data], ['REGISTRY', data.registry_provider],
+     ['CHECKS', (data.checks_active || []).join(', ')]].forEach(([k, v]) => {
+      const row = el('div', 'reason-item');
+      row.appendChild(el('span', 'reason-code', k));
+      row.appendChild(document.createTextNode(v || '—'));
+      box.appendChild(row);
+    });
   } catch {
-    container.innerHTML = `
-      <div style="color:var(--accent);font-size:12px">
-        ⚠️ Waking up...<br>
-        <span style="color:var(--muted);font-size:11px">Free tier may take ~30s to start</span>
-      </div>`;
+    $('status-text').textContent = 'API waking up…';
+    box.textContent = 'Waking up… the free hosting tier can take about 30 s to start.';
   }
 }
 
-// ── SECTION NAV ───────────────────────────────────────────────────────────────
-function showSection(section) {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-}
-
 // ── INIT ──────────────────────────────────────────────────────────────────────
-buildFeed();
-buildFraudBars();
+buildResults();
 checkHealth();
-
-// Load default preset
-loadPreset('restaurant_fraud');
-
-// Refresh health every 30s
+loadProfiles();
 setInterval(checkHealth, 30000);
-
-// Add a new fraud entry to feed every 15s (simulated)
-const EXTRA_FEED = [
-  { icon:'🏪', name:'Krishna Hotel, Jaipur',    type:'Domestic Booking Blocked' },
-  { icon:'📱', name:'Unknown, SIM Farm',        type:'Ghost Connection Detected' },
-  { icon:'🔀', name:'Distributor #8821, Surat', type:'Stock Mismatch Flagged' },
-];
-let feedIdx = 0;
-setInterval(() => {
-  const item = EXTRA_FEED[feedIdx % EXTRA_FEED.length];
-  feedIdx++;
-  const list = document.getElementById('feed-list');
-  const newItem = document.createElement('div');
-  newItem.className = 'feed-item high';
-  newItem.innerHTML = `
-    <span class="feed-icon">${item.icon}</span>
-    <div style="flex:1">
-      <div class="feed-name">${item.name}<span class="feed-badge badge-high">new</span></div>
-      <div class="feed-type">${item.type}</div>
-    </div>
-    <div class="feed-time">just now</div>`;
-  list.insertBefore(newItem, list.firstChild);
-  if (list.children.length > 10) list.removeChild(list.lastChild);
-}, 15000);
 </script>
 </body>
 </html>
